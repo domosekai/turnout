@@ -1,0 +1,11 @@
+// Turnout host rules
+
+// This program was designed to select routes automatically.
+// You are encouraged to install as few custom rules as possible.
+// In transparent proxy mode, hostnames are sniffed from HTTP and TLS packets.
+// However, this might not always work, such as due to encrypted SNI.
+
+// Format (Remove the leading // to take effect)
+//1 sample.com   Exact match, via primary route
+//1 *.baidu.com  Wildcard match
+//2 *github*     No more than 2 asterisks are allowed, via secondary route

@@ -1,0 +1,9 @@
+// Turnout IP/CIDR rules
+
+// This program was designed to select routes automatically.
+// You are encouraged to install as few custom rules as possible.
+// Since system resolver is used, you might also need to consider the impact of bogus results.
+
+// Format (Remove the leading // to take effect)
+//1 192.168.0.0/16   via primary route
+//2 8.8.8.8          via secondary route
