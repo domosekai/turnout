@@ -104,18 +104,21 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	if host != "" && hostRules != nil {
 		route = findRouteForHost(host, hostRules)
 	}
-	if route == 0 && hostRules != nil {
-		ip := net.ParseIP(dest)
-		if ip == nil {
-			route = findRouteForHost(dest, hostRules)
+	if route == 0 {
+		if ip := net.ParseIP(dest); ip != nil {
+			if ipRules != nil {
+				route = findRouteForIP(ip, ipRules)
+			}
+		} else {
+			if hostRules != nil {
+				route = findRouteForHost(dest, hostRules)
+			}
 			if route == 0 && ipRules != nil {
 				if ips, err := net.LookupHost(dest); err == nil {
 					ip := net.ParseIP(ips[0])
 					route = findRouteForIP(ip, ipRules)
 				}
 			}
-		} else {
-			route = findRouteForIP(ip, ipRules)
 		}
 	}
 	switch route {

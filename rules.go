@@ -24,6 +24,7 @@ type hostRule struct {
 	left   string
 	middle string
 	right  string
+	any    bool
 	route  int
 }
 
@@ -104,7 +105,11 @@ func parseHostList(file string) (rules []hostRule) {
 		if err != nil || route < 1 || route > 2 {
 			continue
 		}
-		if strings.Contains(r[1], "**") || r[1] == "*" {
+		if r[1] == "*" {
+			rules = append(rules, hostRule{any: true, route: route})
+			continue
+		}
+		if strings.Contains(r[1], "**") {
 			continue
 		}
 		b1 := strings.HasPrefix(r[1], "*")
@@ -185,6 +190,9 @@ func findRouteForHost(host string, rules []hostRule) int {
 	}
 	host = strings.ToLower(host)
 	for _, v := range rules {
+		if v.any {
+			return v.route
+		}
 		if v.exact != "" {
 			if v.exact == host {
 				return v.route
