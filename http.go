@@ -66,7 +66,7 @@ func handleHTTP(conn net.Conn, total int) {
 			} else if strings.Contains(err.Error(), "reset") {
 				logger.Printf("H %5d:          *    Local connection reset. Sent %d bytes.", total, totalBytes)
 			} else if strings.Contains(err.Error(), "malformed") {
-				logger.Printf("H %5d: ERR           Local connection closed due to bad HTTP request. Sent %d bytes. Error: %s", total, totalBytes, err)
+				logger.Printf("H %5d:         ERR   Local connection closed due to bad HTTP request. Sent %d bytes. Error: %s", total, totalBytes, err)
 			} else {
 				logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes. Error: %s", total, totalBytes, err)
 			}
@@ -96,7 +96,6 @@ func handleHTTP(conn net.Conn, total int) {
 			}
 			respBytes, _ := httputil.DumpResponse(resp, false)
 			if _, err := conn.Write(respBytes); err != nil {
-				logger.Printf("H %5d: ERR           Failed to send reply to client. Error: %s", total, err)
 				break
 			}
 			handleFirstByte(bufIn, &conn, "H", "tcp", host, port, false, total)
@@ -138,6 +137,7 @@ func handleHTTP(conn net.Conn, total int) {
 				_, err := (*out).Write(header)
 				if err != nil {
 					if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, "H", "tcp", host, "", port, true, total, connection); out == nil {
+						logger.Printf("H %5d: ERR           Failed to send HTTP header to server. Error: %s", total, err)
 						bufIn.Discard(bufIn.Buffered())
 						rejectHTTP(&conn)
 						continue
@@ -151,7 +151,7 @@ func handleHTTP(conn net.Conn, total int) {
 				if errors.Is(err, io.EOF) {
 					logger.Printf("H %5d:  *            Parsed %d chunks and %d bytes", total, n, bytes)
 				} else {
-					logger.Printf("H %5d:  *            Parsed %d chunks and %d bytes. Error: %v", total, n, bytes, err)
+					logger.Printf("H %5d: ERR           Parsed %d chunks and %d bytes but failed to sent to server. Error: %s", total, n, bytes, err)
 					bufIn.Discard(bufIn.Buffered())
 					continue
 				}
@@ -169,6 +169,7 @@ func handleHTTP(conn net.Conn, total int) {
 				totalBytes += bytes
 				req.Body.Close()
 				if err != nil {
+					logger.Printf("H %5d: ERR           Failed to send HTTP body to server. Error: %s", total, err)
 					bufIn.Discard(bufIn.Buffered())
 					continue
 				}

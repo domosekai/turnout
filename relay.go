@@ -214,16 +214,15 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 }
 
 func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n int) {
-	bytes, _ := bufIn.WriteTo(*out)
+	bytes, err := bufIn.WriteTo(*out)
 	totalBytes := bytes + int64(n)
-	logger.Printf("%s %5d:          *    Local connection closed. Sent %d bytes.", mode, total, totalBytes)
-	/*if err == nil || strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "time") {
-		logger.Printf("%s %5d:          *    Local connection closed. Sent %d bytes.", mode, total, bytes+int64(n))
+	if err == nil || strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "time") {
+		logger.Printf("%s %5d:          *    Local connection closed. Sent %d bytes.", mode, total, totalBytes)
 	} else if strings.Contains(err.Error(), "reset") {
-		logger.Printf("%s %5d:          *    Local connection reset. Sent %d bytes.", mode, total, bytes+int64(n))
+		logger.Printf("%s %5d:          *    Local connection reset. Sent %d bytes.", mode, total, totalBytes)
 	} else {
-		logger.Printf("%s %5d:          *    Local connection closed. Sent %d bytes. Error: %s", mode, total, bytes+int64(n), err)
-	}*/
+		logger.Printf("%s %5d:         ERR   Local connection closed. Sent %d bytes. Error: %s", mode, total, totalBytes, err)
+	}
 	mu.Lock()
 	sent[route] += totalBytes
 	mu.Unlock()
@@ -423,6 +422,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 				_, err := (*conn).Write(header)
 				totalBytes += int64(len(header))
 				if err != nil {
+					logger.Printf("H %5d:     ERR     %d Failed to write HTTP header to client. Error: %s", total, route, err)
 					totalBytes += int64(bufOut.Buffered())
 					bufOut.Discard(bufOut.Buffered())
 					(*out).Close()
@@ -436,7 +436,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 					if errors.Is(err, io.EOF) {
 						logger.Printf("H %5d:      *      %d Parsed %d chunks and %d bytes", total, route, n, bytes)
 					} else {
-						logger.Printf("H %5d:      *      %d Parsed %d chunks and %d bytes. Error: %v", total, route, n, bytes, err)
+						logger.Printf("H %5d:     ERR     %d Parsed %d chunks and %d bytes but failed to write to client. Error: %s", total, route, n, bytes, err)
 						totalBytes += int64(bufOut.Buffered())
 						bufOut.Discard(bufOut.Buffered())
 						(*out).Close()
@@ -457,6 +457,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 					totalBytes += bytes
 					resp.Body.Close()
 					if err != nil {
+						logger.Printf("H %5d:     ERR     %d Failed to write HTTP body to client. Error: %s", total, route, err)
 						totalBytes += int64(bufOut.Buffered())
 						bufOut.Discard(bufOut.Buffered())
 						(*out).Close()
