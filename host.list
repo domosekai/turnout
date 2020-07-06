@@ -2,6 +2,7 @@
 
 // This program was designed to select routes automatically.
 // You are encouraged to install as few custom rules as possible.
+
 // In transparent proxy mode, hostnames are sniffed from HTTP and TLS packets.
 // However, this might not always work, such as due to encrypted SNI.
 

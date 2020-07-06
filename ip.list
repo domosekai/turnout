@@ -2,7 +2,10 @@
 
 // This program was designed to select routes automatically.
 // You are encouraged to install as few custom rules as possible.
-// Since system resolver is used, you might also need to consider the impact of bogus results.
+
+// If a hostname is available it is passed to the SOCKS5 proxy and resolved by the proxy in some way Turnout does not know.
+// Therefore the routing decision Turnout makes is based solely on the result from the system resolver.
+// If the system resolver may provide bogus result, you need to take that into consideration when writing rules.
 
 // Format (Remove the leading // to take effect)
 //1 192.168.0.0/16   via primary route

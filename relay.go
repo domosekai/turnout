@@ -93,6 +93,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	start2 := make(chan bool, 1)
 	try1 := make(chan bool, 1)
 	try2 := make(chan bool, 1)
+	stop2 := make(chan bool, 1)
 	do1 := make(chan bool, 1)
 	do2 := make(chan bool, 1)
 	var out1, out2 net.Conn
@@ -103,20 +104,25 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	route := 0
 	if host != "" && hostRules != nil {
 		route = findRouteForHost(host, hostRules)
+		if route != 0 {
+			logger.Printf("%s %5d:  *            Host rule matched. Select route %d", mode, total, route)
+		}
 	}
 	if route == 0 {
 		if ip := net.ParseIP(dest); ip != nil {
+			// dest is IP
 			if ipRules != nil {
 				route = findRouteForIP(ip, ipRules)
+				if route != 0 {
+					logger.Printf("%s %5d:  *            IP rule matched for %s. Select route %d", mode, total, ip, route)
+				}
 			}
 		} else {
+			// dest is hostname
 			if hostRules != nil {
 				route = findRouteForHost(dest, hostRules)
-			}
-			if route == 0 && ipRules != nil {
-				if ips, err := net.LookupHost(dest); err == nil {
-					ip := net.ParseIP(ips[0])
-					route = findRouteForIP(ip, ipRules)
+				if route != 0 {
+					logger.Printf("%s %5d:  *            Host rule matched. Select route %d", mode, total, route)
 				}
 			}
 		}
@@ -132,12 +138,10 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 		start1 <- true
 		start2 <- false
 		available = 1
-		logger.Printf("%s %5d:  *            Rule matched. Select route 1", mode, total)
 	case 2:
 		start1 <- false
 		start2 <- true
 		available = 1
-		logger.Printf("%s %5d:  *            Rule matched. Select route 2", mode, total)
 	}
 
 	net1 := network
@@ -146,22 +150,34 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 		net1 = "tcp4"
 	}
 	if route != 2 {
-		go handleRemote(bufIn, conn, &out1, first, full, req, mode, net1, dest, host, port, int(*r1Timeout), total, 1, start1, try1, do1, connection)
+		go handleRemote(bufIn, conn, &out1, first, full, req, mode, net1, dest, host, port, int(*r1Timeout), total, 1, start1, try1, stop2, do1, connection)
 	}
 	if route != 1 {
-		go handleRemote(bufIn, conn, &out2, first, full, req, mode, net2, dest, host, port, int(*r2Timeout), total, 2, start2, try2, do2, connection)
+		go handleRemote(bufIn, conn, &out2, first, full, req, mode, net2, dest, host, port, int(*r2Timeout), total, 2, start2, try2, stop2, do2, connection)
 	}
 
 	// Wait for first byte from server
 	timer1 := time.NewTimer(time.Second * time.Duration(*r1Priority)) // during which route 1 is prioritized, or in successive mode start of route 2 is deferred
 	timer2 := time.NewTimer(time.Second * time.Duration(*r1Timeout+*r2Timeout))
 	wait := true
+	bad2 := false
 	for {
+		// Make sure no channel is written twice without return
+		// and no goroutine will wait forever
 		select {
+		case bad2 = <-stop2:
+			// This is before ok1 returns either true or false
+			if bad2 && available == 2 {
+				if successive {
+					start2 <- false
+				} else {
+					do2 <- false
+				}
+			}
 		case ok1 = <-try1:
 			if ok1 {
 				do1 <- true
-				if available == 2 {
+				if available == 2 && !bad2 {
 					if successive {
 						start2 <- false
 					} else {
@@ -171,7 +187,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 				return &out1, 1
 			}
 			available--
-			if available > 0 {
+			if available > 0 && !bad2 {
 				if successive {
 					start2 <- true
 				}
@@ -183,7 +199,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 				return nil, 0
 			}
 		case ok2 = <-try2:
-			if ok2 {
+			if ok2 && !bad2 {
 				if available == 1 {
 					do2 <- true
 					return &out2, 2
@@ -200,7 +216,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 			}
 		case <-timer1.C:
 			wait = false
-			if ok2 {
+			if ok2 && !bad2 {
 				do2 <- true
 				if available == 2 {
 					do1 <- false
@@ -209,8 +225,10 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 			}
 		case <-timer2.C:
 			do1 <- false
-			start2 <- false
-			do2 <- false
+			if !bad2 {
+				start2 <- false
+				do2 <- false
+			}
 			return nil, 0
 		}
 	}
@@ -233,7 +251,7 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 }
 
 func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full bool, req *http.Request, mode, network, dest, host, port string,
-	timeout, total int, route int, start, try, do chan bool, connection bool) {
+	timeout, total int, route int, start, try, stop2, do chan bool, connection bool) {
 	var err error
 	if !<-start {
 		return
@@ -301,7 +319,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 			logger.Printf("%s %5d: SYN         %d Initial connection timeout", mode, total, route)
 		} else if strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "reset") {
 			logger.Printf("%s %5d: RST         %d Initial connection was reset", mode, total, route)
-		} else if strings.Contains(err.Error(), "no such host") || errors.Is(err, io.EOF) {
+		} else if strings.Contains(err.Error(), "no such host") {
 			logger.Printf("%s %5d: NXD         %d Domain lookup failed", mode, total, route)
 		} else {
 			logger.Printf("%s %5d: ERR         %d Failed to dial server. Error: %s", mode, total, route, err)
@@ -321,6 +339,24 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 		open[route]--
 		mu.Unlock()
 	}()
+
+	// Match IP rules
+	if route == 1 && ipRules != nil {
+		if ip := net.ParseIP(dest); ip == nil {
+			if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+				if route := findRouteForIP(tcpAddr.IP, ipRules); route != 0 {
+					logger.Printf("%s %5d:  *            IP rule matched for %s. Select route %d", mode, total, tcpAddr.IP, route)
+					if route == 1 {
+						stop2 <- true
+					}
+					if route == 2 {
+						try <- false
+						return
+					}
+				}
+			}
+		}
+	}
 
 	// Send first byte to server
 	if len(firstOut) > 0 {
