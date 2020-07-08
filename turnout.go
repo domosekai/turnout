@@ -31,8 +31,12 @@ var r1Timeout = flag.Uint("T1", 2, "Connection timeout (seconds) for primary rou
 var r2Timeout = flag.Uint("T2", 5, "Connection timeout (seconds) for secondary route")
 var force4 = flag.Bool("4", false, "Force IPv4 for connections out of primary route")
 var logFile = flag.String("log", "", "Path to log file. By default logs are written to standard output.")
-var logAppend = flag.Bool("append", false, "Append to the log file if it exists")
-var tickInterval = flag.Uint("tick", 15, "Time interval (minutes) for status logging")
+var logAppend = flag.Bool("append", false, "Append to log file if exists")
+var tickInterval = flag.Uint("tick", 15, "Status logging interval (minutes)")
+var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on primary route. Slower destinations are added to slow list (routed via 2).")
+var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in the slow host/IP list")
+var slowClose = flag.Bool("slowclose", false, "Close low speed connections on primary route")
+var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked host/IP list")
 var version = "unknown"
 var builddate = "unknown"
 
@@ -125,6 +129,10 @@ func main() {
 			logger.Printf("Loaded %d host rules", len(hostRules))
 		}
 	}
+	slowIPSet.timeout = time.Minute * time.Duration(*slowTimeout)
+	slowHostSet.timeout = time.Minute * time.Duration(*slowTimeout)
+	blockedIPSet.timeout = time.Minute * time.Duration(*blockedTimeout)
+	blockedHostSet.timeout = time.Minute * time.Duration(*blockedTimeout)
 	total := 0
 	dispatch(&total)
 	if *tickInterval > 0 {

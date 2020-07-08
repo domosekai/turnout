@@ -74,7 +74,7 @@ func (cr *chunkedReader) chunkHeaderAvailable() bool {
 func (cr *chunkedReader) copy(w *net.Conn) (number int, n int64, err error) {
 	for cr.err == nil {
 		if cr.checkEnd {
-			// We are not reading from memory so disable peeking, only stop at 0-length chunk
+			// We are not reading from memory so disable peeking (buffer may be empty), only stop at 0-length chunk
 			/*if n > 0 && cr.r.Buffered() < 2 {
 				// We have some data. Return early (per the io.Reader
 				// contract) instead of potentially blocking while
@@ -91,7 +91,7 @@ func (cr *chunkedReader) copy(w *net.Conn) (number int, n int64, err error) {
 			cr.checkEnd = false
 		}
 		if cr.n == 0 {
-			// We are not reading from memory so disable peeking, only stop at 0-length chunk
+			// We are not reading from memory so disable peeking (buffer may be empty), only stop at 0-length chunk
 			/*if n > 0 && !cr.chunkHeaderAvailable() {
 				// We've read enough. Don't potentially block
 				// reading a new chunk header.

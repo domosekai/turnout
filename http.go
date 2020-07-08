@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"strings"
+	"time"
 )
 
 func doHTTP(total *int) {
@@ -57,14 +58,15 @@ func handleHTTP(conn net.Conn, total int) {
 	var route int
 	logger.Printf("H %5d:  *            New %s %s -> %s", total, conn.LocalAddr().Network(), conn.RemoteAddr(), conn.LocalAddr())
 	bufIn := bufio.NewReader(conn)
+	var lastReq time.Time
 
 	for {
 		req, err := http.ReadRequest(bufIn)
 		if err != nil {
 			if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") {
-				logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes.", total, totalBytes)
+				logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes", total, totalBytes)
 			} else if strings.Contains(err.Error(), "reset") {
-				logger.Printf("H %5d:          *    Local connection reset. Sent %d bytes.", total, totalBytes)
+				logger.Printf("H %5d:          *    Local connection reset. Sent %d bytes", total, totalBytes)
 			} else if strings.Contains(err.Error(), "malformed") {
 				logger.Printf("H %5d:         ERR   Local connection closed due to bad HTTP request. Sent %d bytes. Error: %s", total, totalBytes, err)
 			} else {
@@ -126,7 +128,7 @@ func handleHTTP(conn net.Conn, total int) {
 				if out != nil {
 					(*out).Close()
 				}
-				if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, "H", "tcp", host, "", port, true, total, connection); out != nil {
+				if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, "H", "tcp", host, "", port, true, total, connection, &lastReq); out != nil {
 					new = false
 				} else {
 					bufIn.Discard(bufIn.Buffered())
@@ -136,7 +138,7 @@ func handleHTTP(conn net.Conn, total int) {
 			} else {
 				_, err := (*out).Write(header)
 				if err != nil {
-					if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, "H", "tcp", host, "", port, true, total, connection); out == nil {
+					if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, "H", "tcp", host, "", port, true, total, connection, &lastReq); out == nil {
 						logger.Printf("H %5d: ERR           Failed to send HTTP header to server. Error: %s", total, err)
 						bufIn.Discard(bufIn.Buffered())
 						rejectHTTP(&conn)
@@ -156,11 +158,13 @@ func handleHTTP(conn net.Conn, total int) {
 					continue
 				}
 				// Write trailer
+				var trailer []byte
 				for {
 					line, err := bufIn.ReadSlice('\n')
-					n, _ := (*out).Write(line)
-					totalBytes += int64(n)
+					trailer = append(trailer, line...)
 					if len(line) == 2 || err != nil {
+						n, _ := (*out).Write(trailer)
+						totalBytes += int64(n)
 						break
 					}
 				}
@@ -174,6 +178,7 @@ func handleHTTP(conn net.Conn, total int) {
 					continue
 				}
 			}
+			lastReq = time.Now()
 		}
 	}
 	if out != nil {
