@@ -22,7 +22,8 @@ import (
 const (
 	initialSize = 5000
 	bufferSize  = 5000
-	sampleSize  = 50000
+	sampleSize  = 100000
+	sampleTime  = 10
 )
 
 var (
@@ -129,6 +130,8 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	}
 
 	switch route {
+	case -1:
+		return nil, 0
 	case 0:
 		start1 <- true
 		if !successive {
@@ -372,10 +375,14 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
 			newRoute, ruleBased = matchIP(total, mode, tcpAddr.IP)
-			if newRoute == 1 {
+			switch newRoute {
+			case -1:
 				stop2 <- true
-			}
-			if newRoute == 2 {
+				try <- false
+				return
+			case 1:
+				stop2 <- true
+			case 2:
 				try <- false
 				return
 			}
@@ -661,7 +668,7 @@ func receiveSend(conn *net.Conn, out io.Reader, ruleBased bool, mode, dest, host
 			sample += int64(n)
 			accum += int64(n)
 			// If n = bufferSize, either connection is too fast or client is slow
-			if time.Since(accumStart).Seconds() > 10 && sample >= sampleSize && n < bufferSize {
+			if time.Since(accumStart).Seconds() > sampleTime && sample >= sampleSize && n < bufferSize {
 				speed := float64(sample) / 1000 / time.Since(sampleStart).Seconds()
 				aveSpeed := float64(accum) / 1000 / time.Since(accumStart).Seconds()
 				if !slow && (aveSpeed < float64(*slowSpeed) || speed < float64(*slowSpeed)*0.3) {

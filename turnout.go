@@ -8,6 +8,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -33,10 +34,11 @@ var force4 = flag.Bool("4", false, "Force IPv4 for connections out of primary ro
 var logFile = flag.String("log", "", "Path to log file. By default logs are written to standard output.")
 var logAppend = flag.Bool("append", false, "Append to log file if exists")
 var tickInterval = flag.Uint("tick", 15, "Status logging interval (minutes)")
-var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on primary route. Slower destinations are added to slow list (routed via 2).")
+var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on primary route. Slower destinations are added to slow list (to be routed via 2).")
 var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in the slow host/IP list")
 var slowClose = flag.Bool("slowclose", false, "Close low speed connections on primary route")
 var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked host/IP list")
+var quiet = flag.Bool("quiet", false, "Suppress all output")
 var version = "unknown"
 var builddate = "unknown"
 
@@ -70,6 +72,8 @@ func main() {
 		}
 		defer f.Close()
 		logger = log.New(f, "", log.Ldate|log.Ltime|log.Lmicroseconds)
+	} else if *quiet {
+		logger = log.New(ioutil.Discard, "", log.Ldate|log.Ltime|log.Lmicroseconds)
 	} else {
 		logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lmicroseconds)
 	}

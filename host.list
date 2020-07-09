@@ -7,6 +7,9 @@
 // However, this might not always work, such as due to encrypted SNI.
 
 // Format (Remove the leading // to take effect)
+// Rules are matched in order
+
 //1 sample.com   Exact match, via primary route
 //1 *.baidu.com  Wildcard match
 //2 *github*     No more than 2 asterisks are allowed, via secondary route
+//-1 *pornhub*   Destinations with route -1 will be blocked
