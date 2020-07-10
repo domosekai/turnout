@@ -79,11 +79,15 @@ func getOriginalDst(c *net.TCPConn) (host string, err error) {
 	}
 
 	rawaddr, err = getorigdst(fd)
-	host = fmt.Sprintf("%d.%d.%d.%d:%d",
-		rawaddr[1],
-		rawaddr[2],
-		rawaddr[3],
-		rawaddr[4],
-		uint16(rawaddr[1+net.IPv4len])<<8+uint16(rawaddr[1+net.IPv4len+1]))
+	if err == nil {
+		host = fmt.Sprintf("%d.%d.%d.%d:%d",
+			rawaddr[1],
+			rawaddr[2],
+			rawaddr[3],
+			rawaddr[4],
+			uint16(rawaddr[1+net.IPv4len])<<8+uint16(rawaddr[1+net.IPv4len+1]))
+		return
+	}
+
 	return
 }

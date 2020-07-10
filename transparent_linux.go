@@ -86,12 +86,18 @@ func handleLocal(conn net.Conn, total int) {
 	}
 	if dest == "" || isLocalAddr(dest) {
 		if tcp, ok := conn.(*net.TCPConn); ok {
-			dest, _ = getOriginalDst(tcp)
+			var err error
+			if dest, err = getOriginalDst(tcp); err != nil {
+				logger.Printf("Failed to get original destination in redirect mode. Error: %s", err)
+				return
+			}
+			if dest == "" || isLocalAddr(dest) {
+				logger.Print("Error: Destination is a local address. Check your configuration.")
+				return
+			}
+		} else {
+			return
 		}
-	}
-	if dest == "" || isLocalAddr(dest) {
-		logger.Print("Error: Destination is a local address. Check your configuration.")
-		return
 	}
 	logger.Printf("T %5d:  *            New %s %s -> %s", total, network, conn.RemoteAddr(), dest)
 	host, port, _ := net.SplitHostPort(dest)
