@@ -594,7 +594,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 				logger.Printf("%s %5d:         RST %d Remote connection reset. Received %d bytes in %.2f s", mode, total, route, totalBytes, totalTime.Seconds())
 				if route == 1 {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-						logger.Printf("H %5d:     SET     %d %s %s added to blocked list", total, route, host, tcpAddr.IP)
+						logger.Printf("%s %5d:     SET     %d %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
 						blockedIPSet.add(tcpAddr.IP)
 						blockedHostSet.add(host)
 					}
