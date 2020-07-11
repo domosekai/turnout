@@ -20,10 +20,11 @@ import (
 )
 
 const (
-	initialSize = 5000
-	bufferSize  = 5000
-	sampleSize  = 100000
-	sampleTime  = 10
+	initialSize   = 5000
+	bufferSize    = 5000
+	sampleSize    = 100000 // Download size for slowness detection, smaller size may be inaccurate
+	sampleTime    = 10     // Due to slow start, assessing the speed too early can be inaccurate, at least wait for this many seconds
+	blockSafeTime = 30     // After this many seconds since last request it is less likely to be blocked by TCP RESET
 )
 
 var (
@@ -471,8 +472,17 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 									blocked.add(tcpAddr.IP)
 								}*/
 							}
+						} else if strings.Contains(err.Error(), "read:") && strings.Contains(err.Error(), "reset") {
+							logger.Printf("H %5d:         RST %d Remote connection reset. Received %d bytes in %.2f s", total, route, totalBytes, totalTime.Seconds())
+							if route == 1 && time.Since(*lastReq).Seconds() < blockSafeTime {
+								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+									logger.Printf("H %5d:         SET %d %s %s added to blocked list", total, route, host, tcpAddr.IP)
+									blockedIPSet.add(tcpAddr.IP)
+									blockedHostSet.add(host)
+								}
+							}
 						} else {
-							logger.Printf("H %5d:         ERR %d Remote connection closed due to bad HTTP response. Received %d bytes in %.2f s. Error: %s", total, route, totalBytes, totalTime.Seconds(), err)
+							logger.Printf("H %5d:         ERR %d Remote connection closed. Received %d bytes in %.2f s. Error: %s", total, route, totalBytes, totalTime.Seconds(), err)
 						}
 						mu.Lock()
 						received[route] += totalBytes
@@ -505,13 +515,6 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 				totalBytes += int64(len(header))
 				if err != nil {
 					logger.Printf("H %5d:     ERR     %d Failed to write HTTP header to client. Error: %s", total, route, err)
-					if route == 1 && strings.Contains(err.Error(), "read:") && strings.Contains(err.Error(), "reset") {
-						if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-							logger.Printf("H %5d:     SET     %d %s %s added to blocked list", total, route, host, tcpAddr.IP)
-							blockedIPSet.add(tcpAddr.IP)
-							blockedHostSet.add(host)
-						}
-					}
 					totalBytes += int64(bufOut.Buffered())
 					bufOut.Discard(bufOut.Buffered())
 					(*out).Close()
@@ -524,15 +527,17 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 					totalBytes += bytes
 					if errors.Is(err, io.EOF) {
 						logger.Printf("H %5d:      *      %d Parsed %d chunks and %d bytes", total, route, n, bytes)
-					} else {
-						logger.Printf("H %5d:     ERR     %d Parsed %d chunks and %d bytes but failed to write to client. Error: %s", total, route, n, bytes, err)
-						if route == 1 && strings.Contains(err.Error(), "read:") && strings.Contains(err.Error(), "reset") {
+					} else if strings.Contains(err.Error(), "read:") && strings.Contains(err.Error(), "reset") {
+						logger.Printf("H %5d:     RST     %d Chunks parsing is reset by server", total, route)
+						if route == 1 && time.Since(*lastReq).Seconds() < blockSafeTime {
 							if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 								logger.Printf("H %5d:     SET     %d %s %s added to blocked list", total, route, host, tcpAddr.IP)
 								blockedIPSet.add(tcpAddr.IP)
 								blockedHostSet.add(host)
 							}
 						}
+					} else {
+						logger.Printf("H %5d:     ERR     %d Parsed %d chunks and %d bytes but failed to write to client. Error: %s", total, route, n, bytes, err)
 						totalBytes += int64(bufOut.Buffered())
 						bufOut.Discard(bufOut.Buffered())
 						(*out).Close()
@@ -555,14 +560,18 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 					totalBytes += bytes
 					resp.Body.Close()
 					if err != nil && !errors.Is(err, io.EOF) {
-						logger.Printf("H %5d:     ERR     %d Failed to write HTTP body to client. Error: %s", total, route, err)
-						if route == 1 && strings.Contains(err.Error(), "read:") && strings.Contains(err.Error(), "reset") {
-							// Linux: "read: connection reset by peer"
-							if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-								logger.Printf("H %5d:     SET     %d %s %s added to blocked list", total, route, host, tcpAddr.IP)
-								blockedIPSet.add(tcpAddr.IP)
-								blockedHostSet.add(host)
+						if strings.Contains(err.Error(), "read:") && strings.Contains(err.Error(), "reset") {
+							logger.Printf("H %5d:     RST     %d Reading HTTP body gets reset by server", total, route)
+							if route == 1 && time.Since(*lastReq).Seconds() < blockSafeTime {
+								// Linux: "read: connection reset by peer"
+								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+									logger.Printf("H %5d:     SET     %d %s %s added to blocked list", total, route, host, tcpAddr.IP)
+									blockedIPSet.add(tcpAddr.IP)
+									blockedHostSet.add(host)
+								}
 							}
+						} else {
+							logger.Printf("H %5d:     ERR     %d Failed to write HTTP body to client. Error: %s", total, route, err)
 						}
 						totalBytes += int64(bufOut.Buffered())
 						bufOut.Discard(bufOut.Buffered())
@@ -592,9 +601,9 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 				}
 			} else if strings.Contains(err.Error(), "read:") && strings.Contains(err.Error(), "reset") {
 				logger.Printf("%s %5d:         RST %d Remote connection reset. Received %d bytes in %.2f s", mode, total, route, totalBytes, totalTime.Seconds())
-				if route == 1 {
+				if route == 1 && time.Since(*lastReq).Seconds() < blockSafeTime {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-						logger.Printf("%s %5d:     SET     %d %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
+						logger.Printf("%s %5d:         SET %d %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
 						blockedIPSet.add(tcpAddr.IP)
 						blockedHostSet.add(host)
 					}
@@ -673,7 +682,7 @@ func receiveSend(conn *net.Conn, out io.Reader, ruleBased bool, mode, dest, host
 				speed := float64(sample) / 1000 / time.Since(sampleStart).Seconds()
 				aveSpeed := float64(accum) / 1000 / time.Since(accumStart).Seconds()
 				if !slow && (aveSpeed < float64(*slowSpeed) || speed < float64(*slowSpeed)*0.3) {
-					logger.Printf("%s %5d:      *      %d Slow connection to %s %s at %.1f kB/s, average %.1f kB/s", mode, total, route, host, addr, speed, aveSpeed)
+					logger.Printf("%s %5d:      *      %d Slow connection to %s %s at %.1f kB/s, average %.1f kB/s, %.1f seconds since last request", mode, total, route, host, addr, speed, aveSpeed, time.Since(accumStart).Seconds())
 					if tcpAddr := addr.(*net.TCPAddr); tcpAddr != nil {
 						logger.Printf("%s %5d:     SET     %d %s %s added to slow list", mode, total, route, host, tcpAddr.IP)
 						slowIPSet.add(tcpAddr.IP)
