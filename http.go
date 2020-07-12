@@ -136,8 +136,11 @@ func handleHTTP(conn net.Conn, total int) {
 					continue
 				}
 			} else {
-				_, err := (*out).Write(header)
-				if err != nil {
+				var err error
+				if out != nil {
+					_, err = (*out).Write(header)
+				}
+				if out == nil || err != nil {
 					if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, "H", "tcp", host, "", port, true, total, connection, &lastReq); out == nil {
 						logger.Printf("H %5d: ERR           Failed to send HTTP header to server. Error: %s", total, err)
 						bufIn.Discard(bufIn.Buffered())
