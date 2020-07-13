@@ -61,7 +61,7 @@ func parseIPList(file string) (rules []ipRule) {
 			continue
 		}
 		route, err := strconv.Atoi(r[0])
-		if err != nil || route < 1 || route > 2 {
+		if err != nil || route == 0 {
 			continue
 		}
 		var ipstr string
@@ -102,7 +102,7 @@ func parseHostList(file string) (rules []hostRule) {
 			continue
 		}
 		route, err := strconv.Atoi(r[0])
-		if err != nil || route < 1 || route > 2 {
+		if err != nil || route == 0 {
 			continue
 		}
 		if r[1] == "*" {
