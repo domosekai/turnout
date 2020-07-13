@@ -8,5 +8,5 @@
 // If the system resolver may provide bogus result, you need to take that into consideration when writing rules.
 
 // Format (Remove the leading // to take effect)
-//1 192.168.0.0/16   via primary route
-//2 8.8.8.8          via secondary route
+//1 192.168.0.0/16   via route 1
+//2 8.8.8.8          via route 2

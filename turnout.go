@@ -20,7 +20,7 @@ import (
 
 var tranAddr = flag.String("b", "", "Listening address for transparent proxy (Linux only) (e.g. 0.0.0.0:2222, [::]:2222)")
 var httpAddr = flag.String("h", "", "Listening address for HTTP proxy (e.g. 0.0.0.0:8080, [::]:8080)")
-var socksAddr = flag.String("s", "", "SOCKS5 server address for secondary route (e.g. 127.0.0.1:1080, [::1]:1080)")
+var socksAddr = flag.String("s", "", "SOCKS5 server address for route 2 (e.g. 127.0.0.1:1080, [::1]:1080)")
 
 //var ifname2 = flag.String("if", "", "Network interface for secondary route (e.g. eth1, wlan1)")
 //var dns2Addr = flag.String("dns", "8.8.8.8:53", "DNS nameserver for the secondary interface (no need for SOCKS) (e.g. 8.8.8.8)")
@@ -28,17 +28,17 @@ var tproxy = flag.Bool("t", false, "Use TPROXY mode in addition to REDIRECT mode
 var hostFile = flag.String("host", "", "File containing custom rules based on hostnames.")
 var ipFile = flag.String("ip", "", "File containing custom rules based on IP/CIDRs. Use with caution as DNS results can be bogus.")
 var r1Priority = flag.Uint("T0", 1, "Time (seconds) during which route 1 is prioritized. Only used in TLS connections.")
-var r1Timeout = flag.Uint("T1", 2, "Connection timeout (seconds) for primary route. In non-TLS connections this is the maximum delay before switching to route 2.")
-var r2Timeout = flag.Uint("T2", 5, "Connection timeout (seconds) for secondary route")
-var force4 = flag.Bool("4", false, "Force IPv4 for connections out of primary route")
+var r1Timeout = flag.Uint("T1", 2, "Connection timeout (seconds) for route 1. In non-TLS connections this is also the maximum delay before switching to route 2.")
+var r2Timeout = flag.Uint("T2", 5, "Connection timeout (seconds) for route 2")
+var force4 = flag.Bool("4", false, "Force IPv4 for connections out of route 1")
 var logFile = flag.String("log", "", "Path to log file. By default logs are written to standard output.")
 var logAppend = flag.Bool("append", false, "Append to log file if exists")
 var tickInterval = flag.Uint("tick", 15, "Status logging interval (minutes)")
-var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on primary route. Slower destinations are added to slow list (to be routed via 2).")
+var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on route 1. Slower destinations will be added to slow list (to be routed via 2).")
 var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in the slow host/IP list")
-var slowClose = flag.Bool("slowclose", false, "Close low speed connections on primary route")
+var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1")
 var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked host/IP list")
-var quiet = flag.Bool("quiet", false, "Suppress all output")
+var quiet = flag.Bool("quiet", false, "Suppress output")
 var version = "unknown"
 var builddate = "unknown"
 
