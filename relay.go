@@ -459,6 +459,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 				if firstResp != nil {
 					resp = firstResp
 					firstResp = nil
+					logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms", total, route, resp.Status, resp.ContentLength, ttfb.Milliseconds())
 				} else {
 					var err error
 					resp, err = http.ReadResponse(bufOut, req)
@@ -490,8 +491,8 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 						mu.Unlock()
 						break
 					}
+					logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d", total, route, resp.Status, resp.ContentLength)
 				}
-				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms", total, route, resp.Status, resp.ContentLength, ttfb.Milliseconds())
 				header, _ := httputil.DumpResponse(resp, false)
 				if !connection {
 					buf := bufio.NewReader(bytes.NewReader(header))
