@@ -24,7 +24,7 @@ const (
 	bufferSize    = 5000
 	sampleSize    = 100000 // Download size for slowness detection, smaller size may be inaccurate
 	sampleTime    = 10     // Due to slow start, assessing the speed too early can be inaccurate, at least wait for this many seconds
-	blockSafeTime = 30     // After this many seconds since last request it is less likely to be blocked by TCP RESET
+	blockSafeTime = 15     // After this many seconds it is less likely to be blocked by TCP RESET
 )
 
 var (
@@ -476,7 +476,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 							}
 						} else if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
 							logger.Printf("H %5d:         RST %d Remote connection reset. Received %d bytes in %.1f s, %.1f s since last request. Error: %s", total, route, totalBytes, totalTime.Seconds(), time.Since(*lastReq).Seconds(), err)
-							if route == 1 && !ruleBased && time.Since(*lastReq).Seconds() < blockSafeTime {
+							if route == 1 && !ruleBased && totalTime.Seconds() < blockSafeTime {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 									logger.Printf("H %5d:         SET %d %s %s added to blocked list", total, route, host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
@@ -604,7 +604,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 				}
 			} else if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
 				logger.Printf("%s %5d:         RST %d Remote connection reset. Received %d bytes in %.1f s, %.1f s since last request. Error: %s", mode, total, route, totalBytes, totalTime.Seconds(), time.Since(*lastReq).Seconds(), err)
-				if route == 1 && !ruleBased && time.Since(*lastReq).Seconds() < blockSafeTime {
+				if route == 1 && !ruleBased && totalTime.Seconds() < blockSafeTime {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 						logger.Printf("%s %5d:         SET %d %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
 						blockedIPSet.add(tcpAddr.IP)
