@@ -105,7 +105,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	successive bool, total int, connection bool, lastReq *time.Time) (*net.Conn, int) {
 	// Dial each route and send first byte out
 	start1 := make(chan bool, 1)
-	start2 := make(chan bool, 1)
+	start2 := make(chan bool, len(socks))
 	try1 := make(chan int, 1)
 	try2 := make(chan int, len(socks))
 	stop2 := make(chan bool, 1)
@@ -113,7 +113,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	do2 := make(chan int, 1)
 	var out1, out2 net.Conn
 	ok1, ok2 := -1, -1
-	var available int
+	var available1, available2 int
 
 	// Match rules
 	route := 0
@@ -137,17 +137,28 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	case 0:
 		start1 <- true
 		if !successive {
-			start2 <- true
+			for range socks {
+				start2 <- true
+			}
 		}
-		available = len(socks) + 1
+		available1 = 1
+		available2 = len(socks)
 	case 1:
 		start1 <- true
 		start2 <- false
-		available = 1
+		available1 = 1
+		available2 = 0
 	case 2:
 		start1 <- false
-		start2 <- true
-		available = len(socks)
+		if !successive {
+			for range socks {
+				start2 <- true
+			}
+		} else {
+			start2 <- true
+		}
+		available1 = 0
+		available2 = len(socks)
 	}
 
 	net1 := network
@@ -178,7 +189,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 		select {
 		// This is before route 1 sends first byte, when it found the IP matches some rule
 		case bad2 = <-stop2:
-			if bad2 && available > 1 {
+			if bad2 && available2 > 0 {
 				if successive {
 					start2 <- false
 				} else {
@@ -189,7 +200,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 		case ok1 = <-try1:
 			if ok1 > 0 {
 				do1 <- 1
-				if available > 1 && !bad2 {
+				if available2 > 0 && !bad2 {
 					if successive {
 						start2 <- false
 					} else {
@@ -198,8 +209,8 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 				}
 				return &out1, 1
 			}
-			available--
-			if available > 0 && !bad2 {
+			available1--
+			if available2 > 0 && !bad2 {
 				if successive {
 					start2 <- true
 				}
@@ -213,7 +224,10 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 		// Route 2 sends status from any server
 		case ok2 = <-try2:
 			if ok2 > 0 && !bad2 {
-				if ok1 == 0 {
+				if successive {
+					start2 <- false
+				}
+				if available1 == 0 {
 					do2 <- ok2
 					return &out2, 2
 				} else if !wait {
@@ -222,11 +236,11 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 					return &out2, 2
 				}
 			} else {
-				available--
-				if successive && !bad2 && (available > 1 || ok1 == 0 && available > 0) {
+				available2--
+				if successive && !bad2 {
 					start2 <- true
 				}
-				if available == 0 {
+				if available1 == 0 && (bad2 || available2 == 0) {
 					return nil, 0
 				}
 			}
@@ -235,22 +249,25 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 			wait = false
 			if ok2 > 0 && !bad2 {
 				do2 <- ok2
-				if ok1 == -1 {
+				if available1 > 0 {
 					do1 <- 0
 				}
 				return &out2, 2
 			}
 		case <-timer2.C:
-			if ok1 == -1 {
+			if available1 > 0 {
 				do1 <- 0
-				if available > 1 && !bad2 {
+				if available2 > 0 && !bad2 {
 					if successive {
 						start2 <- false
 					} else {
 						do2 <- 0
 					}
 				}
-			} else if !bad2 {
+			} else if available2 > 0 && !bad2 {
+				if successive {
+					start2 <- false
+				}
 				do2 <- 0
 			}
 			return nil, 0
