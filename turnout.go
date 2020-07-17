@@ -14,13 +14,14 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
 
 var tranAddr = flag.String("b", "", "Listening address for transparent proxy (Linux only) (e.g. 0.0.0.0:2222, [::]:2222)")
 var httpAddr = flag.String("h", "", "Listening address for HTTP proxy (e.g. 0.0.0.0:8080, [::]:8080)")
-var socksAddr = flag.String("s", "", "SOCKS5 server address for route 2 (e.g. 127.0.0.1:1080, [::1]:1080)")
+var socksAddr = flag.String("s", "", "SOCKS5 server address for route 2. Multiple servers (no load balancing, for fail-safe only) should only be separated by commas. (e.g. 127.0.0.1:1080,127.0.0.1:1081)")
 
 //var ifname2 = flag.String("if", "", "Network interface for secondary route (e.g. eth1, wlan1)")
 //var dns2Addr = flag.String("dns", "8.8.8.8:53", "DNS nameserver for the secondary interface (no need for SOCKS) (e.g. 8.8.8.8)")
@@ -29,7 +30,7 @@ var hostFile = flag.String("host", "", "File containing custom rules based on ho
 var ipFile = flag.String("ip", "", "File containing custom rules based on IP/CIDRs. Use with caution as DNS results can be bogus.")
 var r1Priority = flag.Uint("T0", 1, "Time (seconds) during which route 1 is prioritized. Only used in TLS connections.")
 var r1Timeout = flag.Uint("T1", 2, "Connection timeout (seconds) for route 1. In non-TLS connections this is also the maximum delay before switching to route 2.")
-var r2Timeout = flag.Uint("T2", 5, "Connection timeout (seconds) for route 2")
+var r2Timeout = flag.Uint("T2", 5, "Connection timeout (seconds) for each server on route 2")
 var force4 = flag.Bool("4", false, "Force IPv4 for connections out of route 1")
 var logFile = flag.String("log", "", "Path to log file. By default logs are written to standard output.")
 var logAppend = flag.Bool("append", false, "Append to log file if exists")
@@ -49,6 +50,7 @@ var (
 	open     [3]int
 	sent     [3]int64
 	received [3]int64
+	socks    []string
 	//dns2     string
 )
 
@@ -92,7 +94,7 @@ func main() {
 		log.Fatal("You have specified both a SOCKS server and a network interface. Only one is allowed.")
 	}*/
 	if *socksAddr == "" {
-		log.Fatal("A SOCKS5 server is needed as upstream.")
+		log.Fatal("At least 1 SOCKS5 server is needed as upstream.")
 	}
 	if _, ok := checkAddr(*tranAddr, false); !ok {
 		log.Fatalf("Invalid transparent proxy address %s", *tranAddr)
@@ -101,11 +103,7 @@ func main() {
 		log.Fatalf("Invalid HTTP proxy address %s", *httpAddr)
 	}
 	if *socksAddr != "" {
-		if _, ok := checkAddr(*socksAddr, false); !ok {
-			log.Fatalf("Invalid SOCKS5 proxy address %s", *socksAddr)
-		} else {
-			logger.Printf("SOCKS5 server for secondary route is %s", *socksAddr)
-		}
+		parseSOCKS(*socksAddr)
 	}
 	/*if *ifname2 != "" {
 		if _, err := net.InterfaceByName(*ifname2); err != nil {
@@ -170,4 +168,19 @@ func checkAddr(str string, dns bool) (string, bool) {
 		return "[" + str + "]:53", true
 	}
 	return "", false
+}
+
+func parseSOCKS(str string) {
+	servers := strings.Split(str, ",")
+	for i, s := range servers {
+		if _, ok := checkAddr(s, false); !ok {
+			log.Fatalf("Invalid SOCKS5 proxy address %s", s)
+		} else {
+			logger.Printf("SOCKS5 server %d: %s", i+1, s)
+			socks = append(socks, s)
+		}
+	}
+	if len(socks) == 0 {
+		log.Fatal("At least 1 SOCKS5 server is needed as upstream.")
+	}
 }

@@ -106,13 +106,13 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	// Dial each route and send first byte out
 	start1 := make(chan bool, 1)
 	start2 := make(chan bool, 1)
-	try1 := make(chan bool, 1)
-	try2 := make(chan bool, 1)
+	try1 := make(chan int, 1)
+	try2 := make(chan int, len(socks))
 	stop2 := make(chan bool, 1)
-	do1 := make(chan bool, 1)
-	do2 := make(chan bool, 1)
+	do1 := make(chan int, 1)
+	do2 := make(chan int, 1)
 	var out1, out2 net.Conn
-	var ok1, ok2 bool
+	ok1, ok2 := -1, -1
 	var available int
 
 	// Match rules
@@ -139,7 +139,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 		if !successive {
 			start2 <- true
 		}
-		available = 2
+		available = len(socks) + 1
 	case 1:
 		start1 <- true
 		start2 <- false
@@ -147,7 +147,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	case 2:
 		start1 <- false
 		start2 <- true
-		available = 1
+		available = len(socks)
 	}
 
 	net1 := network
@@ -155,39 +155,45 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	if *force4 {
 		net1 = "tcp4"
 	}
+	totalTimeout := 1
 	if route != 2 {
-		go handleRemote(bufIn, conn, &out1, first, full, ruleBased, req, mode, net1, dest, host, port, int(*r1Timeout), total, 1, start1, try1, stop2, do1, connection, lastReq)
+		go handleRemote(bufIn, conn, &out1, first, full, ruleBased, req, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start1, stop2, try1, do1, connection, lastReq)
+		totalTimeout += int(*r1Timeout)
 	}
 	if route != 1 {
-		go handleRemote(bufIn, conn, &out2, first, full, ruleBased, req, mode, net2, dest, host, port, int(*r2Timeout), total, 2, start2, try2, stop2, do2, connection, lastReq)
+		for i := range socks {
+			go handleRemote(bufIn, conn, &out2, first, full, ruleBased, req, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start2, stop2, try2, do2, connection, lastReq)
+			totalTimeout += int(*r2Timeout)
+		}
 	}
 
 	// Wait for first byte from server
 	timer1 := time.NewTimer(time.Second * time.Duration(*r1Priority)) // during which route 1 is prioritized, or in successive mode start of route 2 is deferred
-	timer2 := time.NewTimer(time.Second * time.Duration(*r1Timeout+*r2Timeout))
+	timer2 := time.NewTimer(time.Second * time.Duration(totalTimeout))
 	wait := true
 	bad2 := false
 	for {
 		// Make sure no channel is written twice without return
 		// and no goroutine will wait forever
 		select {
+		// This is before route 1 sends first byte, when it found the IP matches some rule
 		case bad2 = <-stop2:
-			// This is before ok1 returns either true or false
-			if bad2 && available == 2 {
+			if bad2 && available > 1 {
 				if successive {
 					start2 <- false
 				} else {
-					do2 <- false
+					do2 <- 0
 				}
 			}
+		// Route 1 sends status, bad2 is set by this time
 		case ok1 = <-try1:
-			if ok1 {
-				do1 <- true
-				if available == 2 && !bad2 {
+			if ok1 > 0 {
+				do1 <- 1
+				if available > 1 && !bad2 {
 					if successive {
 						start2 <- false
 					} else {
-						do2 <- false
+						do2 <- 0
 					}
 				}
 				return &out1, 1
@@ -197,43 +203,55 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 				if successive {
 					start2 <- true
 				}
-				if ok2 {
-					do2 <- true
+				if ok2 > 0 {
+					do2 <- ok2
 					return &out2, 2
 				}
 			} else {
 				return nil, 0
 			}
+		// Route 2 sends status from any server
 		case ok2 = <-try2:
-			if ok2 && !bad2 {
-				if available == 1 {
-					do2 <- true
+			if ok2 > 0 && !bad2 {
+				if ok1 == 0 {
+					do2 <- ok2
 					return &out2, 2
 				} else if !wait {
-					do2 <- true
-					do1 <- false
+					do2 <- ok2
+					do1 <- 0
 					return &out2, 2
 				}
 			} else {
 				available--
+				if successive && !bad2 && (available > 1 || ok1 == 0 && available > 0) {
+					start2 <- true
+				}
 				if available == 0 {
 					return nil, 0
 				}
 			}
+		// Priority period for route 1 ends
 		case <-timer1.C:
 			wait = false
-			if ok2 && !bad2 {
-				do2 <- true
-				if available == 2 {
-					do1 <- false
+			if ok2 > 0 && !bad2 {
+				do2 <- ok2
+				if ok1 == -1 {
+					do1 <- 0
 				}
 				return &out2, 2
 			}
 		case <-timer2.C:
-			do1 <- false
-			if !bad2 {
-				start2 <- false
-				do2 <- false
+			if ok1 == -1 {
+				do1 <- 0
+				if available > 1 && !bad2 {
+					if successive {
+						start2 <- false
+					} else {
+						do2 <- 0
+					}
+				}
+			} else if !bad2 {
+				do2 <- 0
 			}
 			return nil, 0
 		}
@@ -278,9 +296,10 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 }
 
 func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, ruleBased bool, req *http.Request, mode, network, dest, host, port string,
-	timeout, total int, route int, start, try, stop2, do chan bool, connection bool, lastReq *time.Time) {
+	timeout, total, route, server int, start, stop2 chan bool, try, do chan int, connection bool, lastReq *time.Time) {
 	var err error
 	if !<-start {
+		start <- false
 		return
 	}
 	var dp string
@@ -288,11 +307,11 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 		dp = net.JoinHostPort(dest, port)
 		logger.Printf("%s %5d:  *          %d Dialing to %s %s", mode, total, route, network, dp)
 		*out, err = net.DialTimeout(network, dp, time.Second*time.Duration(timeout))
-	} else if *socksAddr != "" {
-		dialer, err1 := proxy.SOCKS5("tcp", *socksAddr, nil, &net.Dialer{Timeout: time.Second * time.Duration(timeout)})
+	} else {
+		dialer, err1 := proxy.SOCKS5("tcp", socks[server-1], nil, &net.Dialer{Timeout: time.Second * time.Duration(timeout)})
 		if err1 != nil {
-			logger.Printf("%s %5d: ERR         %d Failed to dial SOCKS server. Error: %s", mode, total, route, err)
-			try <- false
+			logger.Printf("%s %5d: ERR         %d Failed to dial SOCKS server %s. Error: %s", mode, total, route, socks[server-1], err)
+			try <- 0
 			return
 		}
 		if host != "" {
@@ -300,7 +319,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 		} else {
 			dp = net.JoinHostPort(dest, port)
 		}
-		logger.Printf("%s %5d:  *          %d Dialing to %s %s", mode, total, route, network, dp)
+		logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", mode, total, route, network, dp, socks[server-1])
 		*out, err = dialer.Dial(network, dp)
 	}
 	// Binding to interface is not available on Go natively, you have to use raw methods for each platform (SO_BINDTODEVICE on Linux, bind() on Windows) and do communication in raw
@@ -351,7 +370,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 		} else {
 			logger.Printf("%s %5d: ERR         %d Failed to dial server. Error: %s", mode, total, route, err)
 		}
-		try <- false
+		try <- 0
 		return
 	}
 	/*if tcp, ok := (*out).(*net.TCPConn); ok {
@@ -380,12 +399,12 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 			switch newRoute {
 			case -1:
 				stop2 <- true
-				try <- false
+				try <- 0
 				return
 			case 1:
 				stop2 <- true
 			case 2:
-				try <- false
+				try <- 0
 				return
 			}
 		}
@@ -396,7 +415,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 		(*out).SetWriteDeadline(time.Now().Add(time.Second * time.Duration(timeout)))
 		if _, err := (*out).Write(firstOut); err != nil {
 			logger.Printf("%s %5d: ERR         %d Failed to send first byte to server. Error: %s", mode, total, route, err)
-			try <- false
+			try <- 0
 			return
 		}
 		(*out).SetWriteDeadline(time.Time{})
@@ -430,7 +449,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 			} else if !strings.Contains(err.Error(), "closed") {
 				logger.Printf("%s %5d:     ERR     %d Connection closed before receiving first byte. Error: %s", mode, total, route, err)
 			}
-			try <- false
+			try <- 0
 			return
 		}
 	}
@@ -446,10 +465,12 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 			}
 		}
 	}
-	try <- true
+	try <- server
 
 	// Wait for signal to go ahead
-	if <-do {
+	doServer := <-do
+	do <- doServer
+	if doServer == server {
 		*lastReq = time.Now()
 		logger.Printf("%s %5d:      *      %d Continue %s %s -> %s", mode, total, route, (*out).LocalAddr().Network(), (*out).LocalAddr(), (*out).RemoteAddr())
 		if mode == "H" && req != nil {
@@ -529,17 +550,19 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 					totalBytes += bytes
 					if errors.Is(err, io.EOF) {
 						logger.Printf("H %5d:      *      %d Parsed %d chunks and %d bytes", total, route, n, bytes)
-					} else if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
-						logger.Printf("H %5d:     RST     %d Chunks parsing is reset by server. %.1f s since last request. Error: %s", total, route, time.Since(*lastReq).Seconds(), err)
-						if route == 1 && !ruleBased && time.Since(*lastReq).Seconds() < blockSafeTime {
-							if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-								logger.Printf("H %5d:     SET     %d %s %s added to blocked list", total, route, host, tcpAddr.IP)
-								blockedIPSet.add(tcpAddr.IP)
-								blockedHostSet.add(host)
-							}
-						}
 					} else {
-						logger.Printf("H %5d:     ERR     %d Parsed %d chunks and %d bytes but failed to write to client. Error: %s", total, route, n, bytes, err)
+						if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
+							logger.Printf("H %5d:     RST     %d Chunks parsing is reset by server. %.1f s since last request. Error: %s", total, route, time.Since(*lastReq).Seconds(), err)
+							if route == 1 && !ruleBased && time.Since(*lastReq).Seconds() < blockSafeTime {
+								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+									logger.Printf("H %5d:     SET     %d %s %s added to blocked list", total, route, host, tcpAddr.IP)
+									blockedIPSet.add(tcpAddr.IP)
+									blockedHostSet.add(host)
+								}
+							}
+						} else {
+							logger.Printf("H %5d:     ERR     %d Parsed %d chunks and %d bytes but failed to write to client. Error: %s", total, route, n, bytes, err)
+						}
 						totalBytes += int64(bufOut.Buffered())
 						bufOut.Discard(bufOut.Buffered())
 						(*out).Close()
