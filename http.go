@@ -128,7 +128,7 @@ func handleHTTP(conn net.Conn, total int) {
 				if out != nil {
 					(*out).Close()
 				}
-				if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, "H", "tcp", host, "", port, true, total, connection, &lastReq); out != nil {
+				if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out != nil {
 					new = false
 				} else {
 					bufIn.Discard(bufIn.Buffered())
@@ -141,7 +141,7 @@ func handleHTTP(conn net.Conn, total int) {
 					_, err = (*out).Write(header)
 				}
 				if out == nil || err != nil {
-					if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, "H", "tcp", host, "", port, true, total, connection, &lastReq); out == nil {
+					if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out == nil {
 						logger.Printf("H %5d: ERR           Failed to send HTTP header to server. Error: %s", total, err)
 						bufIn.Discard(bufIn.Buffered())
 						rejectHTTP(&conn)

@@ -58,7 +58,7 @@ func handleFirstByte(bufIn *bufio.Reader, conn *net.Conn, mode, network, dest, p
 			if sniff {
 				host, _ = normalizeHostname(m.serverName, port)
 			}
-			if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, nil, mode, network, dest, host, port, false, total, false, &lastReq); out != nil {
+			if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, nil, mode, network, dest, host, port, false, total, false, true, &lastReq); out != nil {
 				relayLocal(bufIn, out, mode, total, route, n, &lastReq)
 			}
 			return
@@ -73,7 +73,7 @@ func handleFirstByte(bufIn *bufio.Reader, conn *net.Conn, mode, network, dest, p
 			if sniff {
 				host, _ = normalizeHostname(req.Host, port)
 			}
-			if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, req, mode, network, dest, host, port, true, total, false, &lastReq); out != nil {
+			if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, req, mode, network, dest, host, port, true, total, false, false, &lastReq); out != nil {
 				relayLocal(bufIn, out, mode, total, route, n, &lastReq)
 			}
 			return
@@ -81,7 +81,7 @@ func handleFirstByte(bufIn *bufio.Reader, conn *net.Conn, mode, network, dest, p
 	}
 
 	// Unknown protocol
-	if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, nil, mode, network, dest, "", port, true, total, false, &lastReq); out != nil {
+	if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, nil, mode, network, dest, "", port, true, total, false, false, &lastReq); out != nil {
 		relayLocal(bufIn, out, mode, total, route, n, &lastReq)
 	}
 }
@@ -102,8 +102,7 @@ func normalizeHostname(host, defaultPort string) (string, string) {
 }
 
 func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req *http.Request, mode, network, dest, host, port string,
-	successive bool, total int, connection bool, lastReq *time.Time) (*net.Conn, int) {
-	// Dial each route and send first byte out
+	successive bool, total int, connection, tls bool, lastReq *time.Time) (*net.Conn, int) {
 	start1 := make(chan bool, 1)
 	start2 := make(chan bool, len(socks))
 	try1 := make(chan int, 1)
@@ -125,7 +124,9 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	if route == 0 {
 		if ip := net.ParseIP(dest); ip != nil {
 			// dest is IP
-			route, ruleBased = matchIP(total, mode, ip)
+			if *dnsOK {
+				route, ruleBased = matchIP(total, mode, ip)
+			}
 		} else {
 			// dest is hostname
 			route, ruleBased = matchHost(total, mode, dest)
@@ -169,12 +170,12 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	}
 	totalTimeout := 1
 	if route != 2 {
-		go handleRemote(bufIn, conn, &out1, first, full, ruleBased, req, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start1, stop2, try1, do1, connection, lastReq)
+		go handleRemote(bufIn, conn, &out1, first, full, ruleBased, req, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start1, stop2, try1, do1, connection, tls, lastReq)
 		totalTimeout += int(*r1Timeout)
 	}
 	if route != 1 {
 		for i := range socks {
-			go handleRemote(bufIn, conn, &out2[i], first, full, ruleBased, req, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start2, stop2, try2, do2, connection, lastReq)
+			go handleRemote(bufIn, conn, &out2[i], first, full, ruleBased, req, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start2, stop2, try2, do2, connection, tls, lastReq)
 			totalTimeout += int(*r2Timeout)
 		}
 	}
@@ -189,7 +190,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 		// Make sure no channel is written twice without return
 		// and no goroutine will wait forever
 		select {
-		// This is before route 1 sends first byte, when it found the IP matches some rule
+		// This is before route 1 sends status, when it found the IP matches some rule
 		case bad2 = <-stop2:
 			if bad2 && available2 > 0 {
 				if successive {
@@ -316,7 +317,7 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 }
 
 func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, ruleBased bool, req *http.Request, mode, network, dest, host, port string,
-	timeout, total, route, server int, start, stop2 chan bool, try, do chan int, connection bool, lastReq *time.Time) {
+	timeout, total, route, server int, start, stop2 chan bool, try, do chan int, connection, tls bool, lastReq *time.Time) {
 	var err error
 	if !<-start {
 		start <- false
@@ -411,7 +412,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 	if host == "" && !destIsIP {
 		host = dest
 	}
-	if route == 1 && !ruleBased && !destIsIP {
+	if route == 1 && !ruleBased && *dnsOK && !destIsIP {
 		// dest is hostname
 		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
@@ -482,6 +483,38 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 				logger.Printf("%s %5d:      *      %d HTTP Status %s Content-length %d", mode, total, route, resp.Status, resp.ContentLength)
 			} else {
 				logger.Printf("%s %5d:     ERR     %d Failed to parse HTTP response. Error: %s", mode, total, route, err)
+				if route == 1 && !ruleBased {
+					try <- 0
+					return
+				}
+			}
+		}
+		if tls && n > recordHeaderLen {
+			if !(recordType(firstIn[0]) == recordTypeHandshake && firstIn[recordHeaderLen] == typeServerHello) {
+				logger.Printf("%s %5d:     ERR     %d Malformed TLS Server Hello", mode, total, route)
+				if route == 1 && !ruleBased {
+					try <- 0
+					return
+				}
+			}
+		}
+	}
+
+	// Match IP rules after TLS and HTTP check if DNS is not trusted
+	if route == 1 && !ruleBased && !*dnsOK {
+		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+			var newRoute int
+			newRoute, ruleBased = matchIP(total, mode, tcpAddr.IP)
+			switch newRoute {
+			case -1:
+				stop2 <- true
+				try <- 0
+				return
+			case 1:
+				stop2 <- true
+			case 2:
+				try <- 0
+				return
 			}
 		}
 	}

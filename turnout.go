@@ -39,6 +39,7 @@ var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on route 1. Sl
 var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in the slow host/IP list")
 var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1")
 var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked host/IP list")
+var dnsOK = flag.Bool("dnsok", false, "Trust DNS results from route 1")
 var quiet = flag.Bool("quiet", false, "Suppress output")
 var version = "unknown"
 var builddate = "unknown"
