@@ -111,7 +111,8 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	stop2 := make(chan bool, 1)
 	do1 := make(chan int, 1)
 	do2 := make(chan int, 1)
-	var out1, out2 net.Conn
+	var out1 net.Conn
+	out2 := make([]net.Conn, len(socks))
 	ok1, ok2 := -1, -1
 	var available1, available2 int
 
@@ -173,7 +174,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	}
 	if route != 1 {
 		for i := range socks {
-			go handleRemote(bufIn, conn, &out2, first, full, ruleBased, req, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start2, stop2, try2, do2, connection, lastReq)
+			go handleRemote(bufIn, conn, &out2[i], first, full, ruleBased, req, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start2, stop2, try2, do2, connection, lastReq)
 			totalTimeout += int(*r2Timeout)
 		}
 	}
@@ -183,6 +184,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	timer2 := time.NewTimer(time.Second * time.Duration(totalTimeout))
 	wait := true
 	bad2 := false
+	var server2 int
 	for {
 		// Make sure no channel is written twice without return
 		// and no goroutine will wait forever
@@ -214,26 +216,27 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 				if successive {
 					start2 <- true
 				}
-				if ok2 > 0 {
-					do2 <- ok2
-					return &out2, 2
+				if server2 > 0 {
+					do2 <- server2
+					return &out2[server2-1], 2
 				}
 			} else {
 				return nil, 0
 			}
 		// Route 2 sends status from any server
 		case ok2 = <-try2:
-			if ok2 > 0 && !bad2 {
+			if ok2 > 0 && !bad2 && server2 == 0 {
+				server2 = ok2
 				if successive {
 					start2 <- false
 				}
 				if available1 == 0 {
-					do2 <- ok2
-					return &out2, 2
+					do2 <- server2
+					return &out2[server2-1], 2
 				} else if !wait {
-					do2 <- ok2
+					do2 <- server2
 					do1 <- 0
-					return &out2, 2
+					return &out2[server2-1], 2
 				}
 			} else {
 				available2--
@@ -247,12 +250,12 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 		// Priority period for route 1 ends
 		case <-timer1.C:
 			wait = false
-			if ok2 > 0 && !bad2 {
-				do2 <- ok2
+			if server2 > 0 && !bad2 {
+				do2 <- server2
 				if available1 > 0 {
 					do1 <- 0
 				}
-				return &out2, 2
+				return &out2[server2-1], 2
 			}
 		case <-timer2.C:
 			if available1 > 0 {

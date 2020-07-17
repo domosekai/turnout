@@ -21,7 +21,7 @@ import (
 
 var tranAddr = flag.String("b", "", "Listening address for transparent proxy (Linux only) (e.g. 0.0.0.0:2222, [::]:2222)")
 var httpAddr = flag.String("h", "", "Listening address for HTTP proxy (e.g. 0.0.0.0:8080, [::]:8080)")
-var socksAddr = flag.String("s", "", "SOCKS5 server address for route 2. Multiple servers (no load balancing, for fail-safe only) should only be separated by commas. (e.g. 127.0.0.1:1080,127.0.0.1:1081)")
+var socksAddr = flag.String("s", "", "SOCKS5 server address for route 2. Multiple servers (no load balancing, for fail-over only) should only be separated by commas. (e.g. 127.0.0.1:1080,127.0.0.1:1081)")
 
 //var ifname2 = flag.String("if", "", "Network interface for secondary route (e.g. eth1, wlan1)")
 //var dns2Addr = flag.String("dns", "8.8.8.8:53", "DNS nameserver for the secondary interface (no need for SOCKS) (e.g. 8.8.8.8)")
