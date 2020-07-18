@@ -25,23 +25,23 @@ var socksAddr = flag.String("s", "", "SOCKS5 server address for route 2. Multipl
 
 //var ifname2 = flag.String("if", "", "Network interface for secondary route (e.g. eth1, wlan1)")
 //var dns2Addr = flag.String("dns", "8.8.8.8:53", "DNS nameserver for the secondary interface (no need for SOCKS) (e.g. 8.8.8.8)")
-var tproxy = flag.Bool("t", false, "Use TPROXY mode in addition to REDIRECT mode for transparent proxy (Linux only)")
-var hostFile = flag.String("host", "", "File containing custom rules based on hostnames.")
-var ipFile = flag.String("ip", "", "File containing custom rules based on IP/CIDRs. Use with caution as DNS results can be bogus.")
-var r1Priority = flag.Uint("T0", 1, "Time (seconds) during which route 1 is prioritized. Only used in TLS connections.")
-var r1Timeout = flag.Uint("T1", 2, "Connection timeout (seconds) for route 1. In non-TLS connections this is also the maximum delay before switching to route 2.")
+var tproxy = flag.Bool("t", false, "Use TPROXY in addition to REDIRECT mode for transparent proxy (Linux only)")
+var hostFile = flag.String("host", "", "File containing custom rules based on hostnames")
+var ipFile = flag.String("ip", "", "File containing custom rules based on IP/CIDRs (may be affected by bogus DNS results)")
+var r1Priority = flag.Uint("T0", 1, "Time (seconds) during which route 1 is prioritized (TLS only)")
+var r1Timeout = flag.Uint("T1", 3, "Connection timeout (seconds) for route 1")
 var r2Timeout = flag.Uint("T2", 5, "Connection timeout (seconds) for each server on route 2")
-var force4 = flag.Bool("4", false, "Force IPv4 for connections out of route 1")
-var logFile = flag.String("log", "", "Path to log file. By default logs are written to standard output.")
+var force4 = flag.Bool("4", false, "Force IPv4 connections out of route 1")
+var logFile = flag.String("log", "", "Path to log file")
 var logAppend = flag.Bool("append", false, "Append to log file if exists")
-var tickInterval = flag.Uint("tick", 15, "Status logging interval (minutes)")
-var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on route 1. Slower destinations will be added to slow list (to be routed via 2).")
-var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in the slow host/IP list")
-var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1")
-var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked host/IP list")
-var dnsOK = flag.Bool("dnsok", false, "Trust DNS results from route 1")
+var tickInterval = flag.Uint("tick", 15, "Logging interval (minutes) for status reporting")
+var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on route 1. Slow destinations will be added to slow list and use route 2 from next time.")
+var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in the slow list")
+var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1 (may break connections)")
+var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked list")
+var dnsOK = flag.Bool("dnsok", false, "Trust system DNS resolver, allowing fast IP rule matching.")
 var quiet = flag.Bool("quiet", false, "Suppress output")
-var httpBadStatus = flag.String("badhttp", "", "Drop these HTTP status from route 1 (plain text HTTP only), separated by commas. (e.g. 403,404,5*)")
+var httpBadStatus = flag.String("badhttp", "", "Drop specified (non-TLS) HTTP response from route 1, separated by commas. (e.g. 403,404,5*)")
 var version = "unknown"
 var builddate = "unknown"
 
@@ -90,22 +90,29 @@ func main() {
 	} else if *httpAddr == "" {
 		log.Fatal("No HTTP proxy is specified.")
 	}
+	if *tranAddr != "" {
+		if s, ok := parseAddr(*tranAddr, false); !ok {
+			log.Fatalf("Invalid transparent proxy address %s", *tranAddr)
+		} else {
+			*tranAddr = s
+		}
+	}
+	if *httpAddr != "" {
+		if s, ok := parseAddr(*httpAddr, false); !ok {
+			log.Fatalf("Invalid HTTP proxy address %s", *httpAddr)
+		} else {
+			*httpAddr = s
+		}
+	}
 	/*if *socksAddr == "" && *ifname2 == "" {
 		log.Fatal("A SOCKS server or network interface is needed as upstream.")
 	} else if *socksAddr != "" && *ifname2 != "" {
 		log.Fatal("You have specified both a SOCKS server and a network interface. Only one is allowed.")
 	}*/
-	if *socksAddr == "" {
-		log.Fatal("At least 1 SOCKS5 server is needed as upstream.")
-	}
-	if _, ok := checkAddr(*tranAddr, false); !ok {
-		log.Fatalf("Invalid transparent proxy address %s", *tranAddr)
-	}
-	if _, ok := checkAddr(*httpAddr, false); !ok {
-		log.Fatalf("Invalid HTTP proxy address %s", *httpAddr)
-	}
 	if *socksAddr != "" {
-		parseSOCKS(*socksAddr)
+		if parseSOCKS(*socksAddr) == 0 {
+			log.Fatal("At least 1 SOCKS5 server is needed as upstream.")
+		}
 	}
 	/*if *ifname2 != "" {
 		if _, err := net.InterfaceByName(*ifname2); err != nil {
@@ -158,38 +165,36 @@ func main() {
 	wg.Wait()
 }
 
-func checkAddr(str string, dns bool) (string, bool) {
-	if str == "" {
-		return "", true
+func parseAddr(str string, dns bool) (string, bool) {
+	s := strings.TrimSpace(str)
+	if s == "" {
+		return "", false
 	}
-	_, _, err := net.SplitHostPort(str)
+	_, _, err := net.SplitHostPort(s)
 	if err == nil {
-		return str, true
+		return s, true
 	}
 	if !dns {
 		return "", false
 	}
-	if _, _, err := net.SplitHostPort(str + ":53"); err == nil {
-		return str + ":53", true
+	if _, _, err := net.SplitHostPort(s + ":53"); err == nil {
+		return s + ":53", true
 	}
-	if _, _, err := net.SplitHostPort("[" + str + "]:53"); err == nil {
-		return "[" + str + "]:53", true
+	if _, _, err := net.SplitHostPort("[" + s + "]:53"); err == nil {
+		return "[" + s + "]:53", true
 	}
 	return "", false
 }
 
-func parseSOCKS(str string) {
+func parseSOCKS(str string) int {
 	servers := strings.Split(str, ",")
 	for i, s := range servers {
-		s = strings.TrimSpace(s)
-		if _, ok := checkAddr(s, false); !ok {
+		if s0, ok := parseAddr(s, false); !ok {
 			log.Fatalf("Invalid SOCKS5 proxy address %s", s)
 		} else {
-			logger.Printf("SOCKS5 server %d: %s", i+1, s)
-			socks = append(socks, s)
+			logger.Printf("SOCKS5 server %d: %s", i+1, s0)
+			socks = append(socks, s0)
 		}
 	}
-	if len(socks) == 0 {
-		log.Fatal("At least 1 SOCKS5 server is needed as upstream.")
-	}
+	return len(socks)
 }
