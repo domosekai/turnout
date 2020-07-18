@@ -169,10 +169,9 @@ func parseHTTPRules(str string) (rules []hostRule) {
 				rules = append(rules, hostRule{middle: strings.ToLower(parts[0]), route: 2})
 			} else if b1 && !b2 {
 				rules = append(rules, hostRule{right: strings.ToLower(parts[0]), route: 2})
-			} else if !b1 && b2 {
-				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), route: 2})
 			} else {
-				rules = append(rules, hostRule{exact: strings.ToLower(parts[0]), route: 2})
+				// Assume no asterisk as left match
+				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), route: 2})
 			}
 		case 2:
 			if b1 && !b2 {

@@ -46,69 +46,38 @@ type chunkedReader struct {
 	checkEnd bool // whether need to check for \r\n chunk footer
 }
 
-func (cr *chunkedReader) beginChunk(w *net.Conn) {
+func (cr *chunkedReader) beginChunk() []byte {
 	// chunk-size CRLF
-	var line []byte
-	line, cr.err = readChunkLine(cr.r, w)
+	var line, line0 []byte
+	line, line0, cr.err = readChunkLine(cr.r)
 	if cr.err != nil {
-		return
+		return nil
 	}
 	cr.n, cr.err = parseHexUint(line)
 	if cr.err != nil {
-		return
+		return nil
 	}
 	if cr.n == 0 {
 		cr.err = io.EOF
 	}
-}
-
-func (cr *chunkedReader) chunkHeaderAvailable() bool {
-	n := cr.r.Buffered()
-	if n > 0 {
-		peek, _ := cr.r.Peek(n)
-		return bytes.IndexByte(peek, '\n') >= 0
-	}
-	return false
+	return line0
 }
 
 func (cr *chunkedReader) copy(w *net.Conn) (number int, n int64, err error) {
 	for cr.err == nil {
-		if cr.checkEnd {
-			// We are not reading from memory so disable peeking (buffer may be empty), only stop at 0-length chunk
-			/*if n > 0 && cr.r.Buffered() < 2 {
-				// We have some data. Return early (per the io.Reader
-				// contract) instead of potentially blocking while
-				// reading more.
-				break
-			}*/
-			if _, cr.err = io.ReadFull(cr.r, cr.buf[:2]); cr.err == nil {
-				if string(cr.buf[:]) != "\r\n" {
-					cr.err = errors.New("malformed chunked encoding")
-					break
-				}
-				io.WriteString(*w, "\r\n")
-			}
-			cr.checkEnd = false
+		h := cr.beginChunk()
+		if cr.n > 0 {
+			(*w).Write(h)
+			var n0 int64
+			n0, cr.err = io.CopyN(*w, cr.r, int64(cr.n)+2)
+			n += n0 + int64(len(h))
+			cr.n = 0
+			number++
 		}
-		if cr.n == 0 {
-			// We are not reading from memory so disable peeking (buffer may be empty), only stop at 0-length chunk
-			/*if n > 0 && !cr.chunkHeaderAvailable() {
-				// We've read enough. Don't potentially block
-				// reading a new chunk header.
-				break
-			}*/
-			cr.beginChunk(w)
-			continue
-		}
-		var n0 int64
-		n0, cr.err = io.CopyN(*w, cr.r, int64(cr.n))
-		n += n0
-		cr.n -= uint64(n0)
-		number++
-		// If we're at the end of a chunk, read the next two
-		// bytes to verify they are "\r\n".
-		if cr.n == 0 && cr.err == nil {
-			cr.checkEnd = true
+		if cr.err == io.EOF {
+			(*w).Write(h)
+			n += int64(len(h))
+			return number, n, cr.err
 		}
 	}
 	return number, n, cr.err
@@ -118,8 +87,9 @@ func (cr *chunkedReader) copy(w *net.Conn) (number int, n int64, err error) {
 // Give up if the line exceeds maxLineLength.
 // The returned bytes are owned by the bufio.Reader
 // so they are only valid until the next bufio read.
-func readChunkLine(b *bufio.Reader, w *net.Conn) ([]byte, error) {
-	p, err := b.ReadSlice('\n')
+func readChunkLine(b *bufio.Reader) (p []byte, p0 []byte, err error) {
+	p, err = b.ReadSlice('\n')
+	p0 = p
 	if err != nil {
 		// We always know when EOF is coming.
 		// If the caller asked for a line, there should be a line.
@@ -128,18 +98,17 @@ func readChunkLine(b *bufio.Reader, w *net.Conn) ([]byte, error) {
 		} else if err == bufio.ErrBufferFull {
 			err = ErrLineTooLong
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	if len(p) >= maxLineLength {
-		return nil, ErrLineTooLong
+		return nil, nil, ErrLineTooLong
 	}
-	(*w).Write(p)
 	p = trimTrailingWhitespace(p)
 	p, err = removeChunkExtension(p)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return p, nil
+	return
 }
 
 func trimTrailingWhitespace(b []byte) []byte {

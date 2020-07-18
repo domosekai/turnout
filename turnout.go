@@ -41,7 +41,7 @@ var slowClose = flag.Bool("slowclose", false, "Close low speed connections immed
 var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked host/IP list")
 var dnsOK = flag.Bool("dnsok", false, "Trust DNS results from route 1")
 var quiet = flag.Bool("quiet", false, "Suppress output")
-var httpBadStatus = flag.String("badhttp", "", "Drop these HTTP status texts from route 1 (plain text HTTP only), separated by commas. (e.g. 403*,404*,5*)")
+var httpBadStatus = flag.String("badhttp", "", "Drop these HTTP status from route 1 (plain text HTTP only), separated by commas. (e.g. 403,404,5*)")
 var version = "unknown"
 var builddate = "unknown"
 
