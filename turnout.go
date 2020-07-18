@@ -21,7 +21,7 @@ import (
 
 var tranAddr = flag.String("b", "", "Listening address for transparent proxy (Linux only) (e.g. 0.0.0.0:2222, [::]:2222)")
 var httpAddr = flag.String("h", "", "Listening address for HTTP proxy (e.g. 0.0.0.0:8080, [::]:8080)")
-var socksAddr = flag.String("s", "", "SOCKS5 server address for route 2. Multiple servers (no load balancing, for fail-over only) should only be separated by commas. (e.g. 127.0.0.1:1080,127.0.0.1:1081)")
+var socksAddr = flag.String("s", "", "SOCKS5 server address for route 2. Multiple servers (fail-over only, no load balancing) should be separated by commas. (e.g. 127.0.0.1:1080,127.0.0.1:1081)")
 
 //var ifname2 = flag.String("if", "", "Network interface for secondary route (e.g. eth1, wlan1)")
 //var dns2Addr = flag.String("dns", "8.8.8.8:53", "DNS nameserver for the secondary interface (no need for SOCKS) (e.g. 8.8.8.8)")
@@ -41,6 +41,7 @@ var slowClose = flag.Bool("slowclose", false, "Close low speed connections immed
 var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked host/IP list")
 var dnsOK = flag.Bool("dnsok", false, "Trust DNS results from route 1")
 var quiet = flag.Bool("quiet", false, "Suppress output")
+var httpBadStatus = flag.String("badhttp", "", "Drop these HTTP status texts from route 1 (plain text HTTP only), separated by commas. (e.g. 403*,404*,5*)")
 var version = "unknown"
 var builddate = "unknown"
 
@@ -132,6 +133,12 @@ func main() {
 			logger.Printf("Loaded %d host rules", len(hostRules))
 		}
 	}
+	if *httpBadStatus != "" {
+		httpRules = parseHTTPRules(*httpBadStatus)
+		if httpRules != nil {
+			logger.Printf("Loaded %d HTTP rules", len(httpRules))
+		}
+	}
 	slowIPSet.timeout = time.Minute * time.Duration(*slowTimeout)
 	slowHostSet.timeout = time.Minute * time.Duration(*slowTimeout)
 	blockedIPSet.timeout = time.Minute * time.Duration(*blockedTimeout)
@@ -143,7 +150,7 @@ func main() {
 			c := time.Tick(time.Minute * time.Duration(*tickInterval))
 			for range c {
 				logger.Printf("STATUS Open connections: Local %d Remote %d / %d", open[0], open[1], open[2])
-				logger.Printf("STATUS Route 1 Sent %.1fMB Recv %.1fMB / Route 2 Sent %.1fMB Recv %.1fMB",
+				logger.Printf("STATUS Route 1 Sent %.1f MB Recv %.1f MB / Route 2 Sent %.1f MB Recv %.1f MB",
 					float64(sent[1])/1000000, float64(received[1])/1000000, float64(sent[2])/1000000, float64(received[2])/1000000)
 			}
 		}()
@@ -174,6 +181,7 @@ func checkAddr(str string, dns bool) (string, bool) {
 func parseSOCKS(str string) {
 	servers := strings.Split(str, ",")
 	for i, s := range servers {
+		s = strings.TrimSpace(s)
 		if _, ok := checkAddr(s, false); !ok {
 			log.Fatalf("Invalid SOCKS5 proxy address %s", s)
 		} else {

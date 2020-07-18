@@ -31,6 +31,7 @@ type hostRule struct {
 var (
 	ipRules   []ipRule
 	hostRules []hostRule
+	httpRules []hostRule
 )
 
 type byByte []ipRule
@@ -145,6 +146,53 @@ func parseHostList(file string) (rules []hostRule) {
 	return
 }
 
+func parseHTTPRules(str string) (rules []hostRule) {
+	rulestr := strings.Split(str, ",")
+	for _, s := range rulestr {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if s == "*" {
+			rules = append(rules, hostRule{any: true, route: 2})
+			continue
+		}
+		if strings.Contains(s, "**") {
+			continue
+		}
+		b1 := strings.HasPrefix(s, "*")
+		b2 := strings.HasSuffix(s, "*")
+		parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(s, "*"), "*"), "*")
+		switch len(parts) {
+		case 1:
+			if b1 && b2 {
+				rules = append(rules, hostRule{middle: strings.ToLower(parts[0]), route: 2})
+			} else if b1 && !b2 {
+				rules = append(rules, hostRule{right: strings.ToLower(parts[0]), route: 2})
+			} else if !b1 && b2 {
+				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), route: 2})
+			} else {
+				rules = append(rules, hostRule{exact: strings.ToLower(parts[0]), route: 2})
+			}
+		case 2:
+			if b1 && !b2 {
+				rules = append(rules, hostRule{middle: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), route: 2})
+			} else if !b1 && b2 {
+				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), route: 2})
+			} else if !b1 && !b2 {
+				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), route: 2})
+			}
+		case 3:
+			if !b1 && !b2 {
+				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), right: strings.ToLower(parts[2]), route: 2})
+			}
+		default:
+			log.Fatalf("Invalid HTTP rule: %s", s)
+		}
+	}
+	return
+}
+
 func mark4to6(mark net.IPMask) net.IPMask {
 	var prefix = []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
 	p := make(net.IPMask, net.IPv6len)
@@ -184,22 +232,24 @@ func findRouteForIP(ip net.IP, rules []ipRule) int { // based on sort.Search()
 	return 0
 }
 
-func findRouteForHost(host string, rules []hostRule) int {
+func findRouteForText(text string, rules []hostRule, ignoreCase bool) int {
 	if rules == nil {
 		return 0
 	}
-	host = strings.ToLower(host)
+	if ignoreCase {
+		text = strings.ToLower(text)
+	}
 	for _, v := range rules {
 		if v.any {
 			return v.route
 		}
 		if v.exact != "" {
-			if v.exact == host {
+			if v.exact == text {
 				return v.route
 			}
 			continue
 		}
-		h := host
+		h := text
 		if v.left != "" {
 			if strings.HasPrefix(h, v.left) {
 				h = strings.TrimPrefix(h, v.left)
@@ -215,7 +265,7 @@ func findRouteForHost(host string, rules []hostRule) int {
 			}
 		}
 		if v.middle != "" {
-			if !strings.Contains(host, v.middle) {
+			if !strings.Contains(h, v.middle) {
 				continue
 			}
 		}

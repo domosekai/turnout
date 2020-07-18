@@ -476,11 +476,25 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 	}
 	(*out).SetReadDeadline(time.Time{})
 	ttfb := time.Since(sentTime)
-	if n > 0 {
+
+	// Check header validity
+	if mode == "H" && req != nil {
+		logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms", total, route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
+		if route == 1 && !ruleBased && findRouteForText(firstResp.Status, httpRules, false) == 2 {
+			logger.Printf("%s %5d:     ERR     %d HTTP Status in filter list", mode, total, route)
+			try <- 0
+			return
+		}
+	} else {
 		logger.Printf("%s %5d:      *      %d First %d bytes from server. TTFB %d ms", mode, total, route, n, ttfb.Milliseconds())
 		if req != nil {
 			if resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(firstIn[:n])), req); err == nil {
 				logger.Printf("%s %5d:      *      %d HTTP Status %s Content-length %d", mode, total, route, resp.Status, resp.ContentLength)
+				if route == 1 && !ruleBased && findRouteForText(resp.Status, httpRules, false) == 2 {
+					logger.Printf("%s %5d:     ERR     %d HTTP Status in filter list", mode, total, route)
+					try <- 0
+					return
+				}
 			} else {
 				logger.Printf("%s %5d:     ERR     %d Failed to parse HTTP response. Error: %s", mode, total, route, err)
 				if route == 1 && !ruleBased {
@@ -533,7 +547,6 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 				if firstResp != nil {
 					resp = firstResp
 					firstResp = nil
-					logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms", total, route, resp.Status, resp.ContentLength, ttfb.Milliseconds())
 				} else {
 					var err error
 					resp, err = http.ReadResponse(bufOut, req)
@@ -700,7 +713,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 
 func matchHost(total int, mode, host string) (route int, ruleBased bool) {
 	if hostRules != nil {
-		route = findRouteForHost(host, hostRules)
+		route = findRouteForText(host, hostRules, true)
 		if route != 0 {
 			logger.Printf("%s %5d:  *            Host rule matched for %s. Select route %d", mode, total, host, route)
 			ruleBased = true
