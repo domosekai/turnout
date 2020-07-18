@@ -21,7 +21,7 @@ import (
 
 const (
 	initialSize   = 5000
-	bufferSize    = 5000
+	bufferSize    = 10000  // For speed check only
 	sampleSize    = 100000 // Download size for slowness detection, smaller size may be inaccurate
 	sampleTime    = 10     // Due to slow start, assessing the speed too early can be inaccurate, at least wait for this many seconds
 	blockSafeTime = 15     // After this many seconds it is less likely to be blocked by TCP RESET

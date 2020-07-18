@@ -7,6 +7,8 @@
 // Therefore the routing decision Turnout makes is based solely on the result from the system resolver.
 // If the system resolver may provide bogus result, you need to take that into consideration when writing rules.
 
+// Destinations with specific routes are exempt from speed check.
+
 // Format (Remove the leading // to take effect)
 //1 192.168.0.0/16   via route 1
 //2 8.8.8.8          via route 2
