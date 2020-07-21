@@ -147,8 +147,7 @@ func parseHostList(file string) (rules []hostRule) {
 }
 
 func parseHTTPRules(str string) (rules []hostRule) {
-	rulestr := strings.Split(str, ",")
-	for _, s := range rulestr {
+	for _, s := range strings.Split(str, ",") {
 		s = strings.TrimSpace(s)
 		if s == "" {
 			continue

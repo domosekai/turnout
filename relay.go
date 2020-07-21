@@ -103,8 +103,8 @@ func normalizeHostname(host, defaultPort string) (string, string) {
 
 func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req *http.Request, mode, network, dest, host, port string,
 	successive bool, total int, connection, tls bool, lastReq *time.Time) (*net.Conn, int) {
-	start1 := make(chan bool, 1)
-	start2 := make(chan bool, len(socks))
+	start1 := make(chan int, 1)
+	start2 := make(chan int, len(socks))
 	try1 := make(chan int, 1)
 	try2 := make(chan int, len(socks))
 	stop2 := make(chan bool, 1)
@@ -137,27 +137,31 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	case -1:
 		return nil, 0
 	case 0:
-		start1 <- true
+		start1 <- 1
 		if !successive {
-			for range socks {
-				start2 <- true
+			if *fastTry {
+				for i := range socks {
+					start2 <- i + 1
+				}
+			} else {
+				start2 <- 1
 			}
 		}
 		available1 = 1
 		available2 = len(socks)
 	case 1:
-		start1 <- true
-		start2 <- false
+		start1 <- 1
+		start2 <- 0
 		available1 = 1
 		available2 = 0
 	case 2:
-		start1 <- false
-		if !successive {
-			for range socks {
-				start2 <- true
+		start1 <- 0
+		if !successive && *fastTry {
+			for i := range socks {
+				start2 <- i + 1
 			}
 		} else {
-			start2 <- true
+			start2 <- 1
 		}
 		available1 = 0
 		available2 = len(socks)
@@ -170,12 +174,12 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	}
 	totalTimeout := 1
 	if route != 2 {
-		go handleRemote(bufIn, conn, &out1, first, full, ruleBased, req, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start1, stop2, try1, do1, connection, tls, lastReq)
+		go handleRemote(bufIn, conn, &out1, first, full, ruleBased, req, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start1, try1, do1, stop2, connection, tls, lastReq)
 		totalTimeout += int(*r1Timeout)
 	}
 	if route != 1 {
 		for i := range socks {
-			go handleRemote(bufIn, conn, &out2[i], first, full, ruleBased, req, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start2, stop2, try2, do2, connection, tls, lastReq)
+			go handleRemote(bufIn, conn, &out2[i], first, full, ruleBased, req, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start2, try2, do2, stop2, connection, tls, lastReq)
 			totalTimeout += int(*r2Timeout)
 		}
 	}
@@ -193,29 +197,21 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 		// This is before route 1 sends status, when it found the IP matches some rule
 		case bad2 = <-stop2:
 			if bad2 && available2 > 0 {
-				if successive {
-					start2 <- false
-				} else {
-					do2 <- 0
-				}
+				do2 <- 0
 			}
 		// Route 1 sends status, bad2 is set by this time
 		case ok1 = <-try1:
 			if ok1 > 0 {
 				do1 <- 1
 				if available2 > 0 && !bad2 {
-					if successive {
-						start2 <- false
-					} else {
-						do2 <- 0
-					}
+					do2 <- 0
 				}
 				return &out1, 1
 			}
 			available1--
 			if available2 > 0 && !bad2 {
 				if successive {
-					start2 <- true
+					start2 <- 1
 				}
 				if server2 > 0 {
 					do2 <- server2
@@ -228,8 +224,8 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 		case ok2 = <-try2:
 			if ok2 > 0 && !bad2 && server2 == 0 {
 				server2 = ok2
-				if successive {
-					start2 <- false
+				if successive || !*fastTry {
+					start2 <- 0
 				}
 				if available1 == 0 {
 					do2 <- server2
@@ -241,8 +237,8 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 				}
 			} else {
 				available2--
-				if successive && !bad2 {
-					start2 <- true
+				if (successive || !*fastTry) && !bad2 && available2 > 0 {
+					start2 <- len(socks) - available2 + 1
 				}
 				if available1 == 0 && (bad2 || available2 == 0) {
 					return nil, 0
@@ -261,17 +257,8 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 		case <-timer2.C:
 			if available1 > 0 {
 				do1 <- 0
-				if available2 > 0 && !bad2 {
-					if successive {
-						start2 <- false
-					} else {
-						do2 <- 0
-					}
-				}
-			} else if available2 > 0 && !bad2 {
-				if successive {
-					start2 <- false
-				}
+			}
+			if available2 > 0 && !bad2 {
 				do2 <- 0
 			}
 			return nil, 0
@@ -317,13 +304,31 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 }
 
 func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, ruleBased bool, req *http.Request, mode, network, dest, host, port string,
-	timeout, total, route, server int, start, stop2 chan bool, try, do chan int, connection, tls bool, lastReq *time.Time) {
-	var err error
-	if !<-start {
-		start <- false
-		return
+	timeout, total, route, server int, start, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
+	for {
+		select {
+		case s := <-start:
+			if s == 0 {
+				start <- 0
+				return
+			}
+			if s != server {
+				start <- s
+			} else {
+				doRemote(bufIn, conn, out, firstOut, full, ruleBased, req, mode, network, dest, host, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
+				return
+			}
+		case s := <-do:
+			do <- s
+			return
+		}
 	}
+}
+
+func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, ruleBased bool, req *http.Request, mode, network, dest, host, port string,
+	timeout, total, route, server int, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
 	var dp string
+	var err error
 	if route == 1 {
 		dp = net.JoinHostPort(dest, port)
 		logger.Printf("%s %5d:  *          %d Dialing to %s %s", mode, total, route, network, dp)

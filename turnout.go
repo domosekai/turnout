@@ -19,29 +19,30 @@ import (
 	"time"
 )
 
-var tranAddr = flag.String("b", "", "Listening address for transparent proxy (Linux only) (e.g. 0.0.0.0:2222, [::]:2222)")
-var httpAddr = flag.String("h", "", "Listening address for HTTP proxy (e.g. 0.0.0.0:8080, [::]:8080)")
-var socksAddr = flag.String("s", "", "SOCKS5 server address for route 2. Multiple servers (fail-over only, no load balancing) should be separated by commas. (e.g. 127.0.0.1:1080,127.0.0.1:1081)")
+var tranAddr = flag.String("b", "", "Listening address and port for transparent proxy (Linux only) (e.g. 0.0.0.0:2222, [::]:2222)")
+var httpAddr = flag.String("h", "", "Listening address and port for HTTP proxy (e.g. 0.0.0.0:8080, [::]:8080)")
+var socksAddr = flag.String("s", "", "SOCKS5 server(s) for route 2. Multiple servers will be tried in the input order (i.e. fail-over), unless fasttry option is set. (e.g. 127.0.0.1:1080,127.0.0.1:1081)")
 
 //var ifname2 = flag.String("if", "", "Network interface for secondary route (e.g. eth1, wlan1)")
 //var dns2Addr = flag.String("dns", "8.8.8.8:53", "DNS nameserver for the secondary interface (no need for SOCKS) (e.g. 8.8.8.8)")
 var tproxy = flag.Bool("t", false, "Use TPROXY in addition to REDIRECT mode for transparent proxy (Linux only)")
 var hostFile = flag.String("host", "", "File containing custom rules based on hostnames")
-var ipFile = flag.String("ip", "", "File containing custom rules based on IP/CIDRs (may be affected by bogus DNS results)")
+var ipFile = flag.String("ip", "", "File containing custom rules based on IP/CIDRs")
 var r1Priority = flag.Uint("T0", 1, "Time (seconds) during which route 1 is prioritized (TLS only)")
 var r1Timeout = flag.Uint("T1", 3, "Connection timeout (seconds) for route 1")
 var r2Timeout = flag.Uint("T2", 5, "Connection timeout (seconds) for each server on route 2")
 var force4 = flag.Bool("4", false, "Force IPv4 connections out of route 1")
 var logFile = flag.String("log", "", "Path to log file")
 var logAppend = flag.Bool("append", false, "Append to log file if exists")
-var tickInterval = flag.Uint("tick", 15, "Logging interval (minutes) for status reporting")
-var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on route 1. Slow destinations will be added to slow list and use route 2 from next time. This feature has performance impact.")
+var tickInterval = flag.Uint("tick", 15, "Logging interval (minutes) for status report")
+var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on route 1. Slow destinations will be added to slow list and use route 2 from next time. This feature may have performance impact.")
 var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in the slow list")
-var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1 (may break connections)")
+var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1. This may break connections.")
 var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked list")
-var dnsOK = flag.Bool("dnsok", false, "Trust system DNS resolver, allowing fast IP rule matching.")
+var dnsOK = flag.Bool("dnsok", false, "Trust system DNS resolver (allowing fast IP rule matching)")
 var quiet = flag.Bool("quiet", false, "Suppress output")
-var httpBadStatus = flag.String("badhttp", "", "Drop specified (non-TLS) HTTP response from route 1, separated by commas. (e.g. 403,404,5*)")
+var httpBadStatus = flag.String("badhttp", "", "Drop specified (non-TLS) HTTP response from route 1 (e.g. 403,404,5*)")
+var fastTry = flag.Bool("fasttry", false, "Try connecting to all SOCKS servers simutaneously and pick the fastest instead of trying one by one. This may break some sites. (TLS only)")
 var version = "unknown"
 var builddate = "unknown"
 
@@ -187,8 +188,7 @@ func parseAddr(str string, dns bool) (string, bool) {
 }
 
 func parseSOCKS(str string) int {
-	servers := strings.Split(str, ",")
-	for i, s := range servers {
+	for i, s := range strings.Split(str, ",") {
 		if s0, ok := parseAddr(s, false); !ok {
 			log.Fatalf("Invalid SOCKS5 proxy address %s", s)
 		} else {
