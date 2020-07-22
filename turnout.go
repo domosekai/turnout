@@ -21,7 +21,9 @@ import (
 
 var tranAddr = flag.String("b", "", "Listening address and port for transparent proxy (Linux only) (e.g. 0.0.0.0:2222, [::]:2222)")
 var httpAddr = flag.String("h", "", "Listening address and port for HTTP proxy (e.g. 0.0.0.0:8080, [::]:8080)")
-var socksAddr = flag.String("s", "", "SOCKS5 server(s) for route 2. Multiple servers will be tried in the input order (i.e. fail-over), unless fasttry option is set. (e.g. 127.0.0.1:1080,127.0.0.1:1081)")
+var socksAddr = flag.String("s", "", "Priority 1 SOCKS5 server(s) for route 2. Multiple servers will be attempted simultaneously to find the fastest route. Use s2 and s3 if you need fail-over only. (e.g. 127.0.0.1:1080,127.0.0.1:1081)")
+var socksAddr2 = flag.String("s2", "", "Priority 2 SOCKS5 server(s) for route 2. These servers will only be used if priority 1 servers have failed.")
+var socksAddr3 = flag.String("s3", "", "Priority 3 SOCKS5 server(s) for route 2. These servers will only be used if priority 2 servers have failed.")
 
 //var ifname2 = flag.String("if", "", "Network interface for secondary route (e.g. eth1, wlan1)")
 //var dns2Addr = flag.String("dns", "8.8.8.8:53", "DNS nameserver for the secondary interface (no need for SOCKS) (e.g. 8.8.8.8)")
@@ -42,9 +44,13 @@ var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries i
 var dnsOK = flag.Bool("dnsok", false, "Trust system DNS resolver (allowing fast IP rule matching)")
 var quiet = flag.Bool("quiet", false, "Suppress output")
 var httpBadStatus = flag.String("badhttp", "", "Drop specified (non-TLS) HTTP response from route 1 (e.g. 403,404,5*)")
-var fastTry = flag.Bool("fasttry", false, "Try connecting to all SOCKS servers simutaneously and pick the fastest instead of trying one by one. This may break some sites. (TLS only)")
 var version = "unknown"
 var builddate = "unknown"
+
+type server struct {
+	addr string
+	pri  int
+}
 
 var (
 	logger   *log.Logger
@@ -53,14 +59,15 @@ var (
 	open     [3]int
 	sent     [3]int64
 	received [3]int64
-	socks    []string
+	socks    []server
+	priority [4][]int
 	//dns2     string
 )
 
 func main() {
 	flag.Parse()
 	if flag.NArg() > 0 || len(os.Args) == 1 {
-		fmt.Fprintf(os.Stderr, "Turnout v%s (build %s) usage:\n", version, builddate)
+		fmt.Fprintf(os.Stderr, "Turnout %s (build %s) usage:\n", version, builddate)
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
@@ -110,10 +117,11 @@ func main() {
 	} else if *socksAddr != "" && *ifname2 != "" {
 		log.Fatal("You have specified both a SOCKS server and a network interface. Only one is allowed.")
 	}*/
-	if *socksAddr != "" {
-		if parseSOCKS(*socksAddr) == 0 {
-			log.Fatal("At least 1 SOCKS5 server is needed as upstream.")
-		}
+	if parseSOCKS(*socksAddr, 1) == 0 {
+		log.Fatal("At least 1 SOCKS5 server is needed as upstream.")
+	}
+	if parseSOCKS(*socksAddr2, 2) > 0 {
+		parseSOCKS(*socksAddr3, 3)
 	}
 	/*if *ifname2 != "" {
 		if _, err := net.InterfaceByName(*ifname2); err != nil {
@@ -187,14 +195,18 @@ func parseAddr(str string, dns bool) (string, bool) {
 	return "", false
 }
 
-func parseSOCKS(str string) int {
-	for i, s := range strings.Split(str, ",") {
+func parseSOCKS(str string, pri int) int {
+	if str == "" {
+		return 0
+	}
+	for _, s := range strings.Split(str, ",") {
 		if s0, ok := parseAddr(s, false); !ok {
 			log.Fatalf("Invalid SOCKS5 proxy address %s", s)
 		} else {
-			logger.Printf("SOCKS5 server %d: %s", i+1, s0)
-			socks = append(socks, s0)
+			logger.Printf("SOCKS5 server %s (Priority %d)", s0, pri)
+			socks = append(socks, server{s0, pri})
+			priority[pri] = append(priority[pri], len(socks)-1)
 		}
 	}
-	return len(socks)
+	return len(priority[pri])
 }

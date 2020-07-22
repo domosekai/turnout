@@ -139,11 +139,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	case 0:
 		start1 <- 1
 		if !successive {
-			if *fastTry {
-				for i := range socks {
-					start2 <- i + 1
-				}
-			} else {
+			for range priority[1] {
 				start2 <- 1
 			}
 		}
@@ -156,9 +152,9 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 		available2 = 0
 	case 2:
 		start1 <- 0
-		if !successive && *fastTry {
-			for i := range socks {
-				start2 <- i + 1
+		if !successive {
+			for range priority[1] {
+				start2 <- 1
 			}
 		} else {
 			start2 <- 1
@@ -190,6 +186,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 	wait := true
 	bad2 := false
 	var server2 int
+	var count2 int
 	for {
 		// Make sure no channel is written twice without return
 		// and no goroutine will wait forever
@@ -222,9 +219,10 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 			}
 		// Route 2 sends status from any server
 		case ok2 = <-try2:
+			count2++
 			if ok2 > 0 && !bad2 && server2 == 0 {
 				server2 = ok2
-				if successive || !*fastTry {
+				if available2 > 1 {
 					start2 <- 0
 				}
 				if available1 == 0 {
@@ -237,10 +235,25 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, req 
 				}
 			} else {
 				available2--
-				if (successive || !*fastTry) && !bad2 && available2 > 0 {
-					start2 <- len(socks) - available2 + 1
-				}
-				if available1 == 0 && (bad2 || available2 == 0) {
+				if available2 > 0 && !bad2 {
+					if successive {
+						if count2 < len(priority[1]) {
+							start2 <- 1
+						} else if count2 < len(priority[1])+len(priority[2]) {
+							start2 <- 2
+						} else if count2 < len(priority[1])+len(priority[2])+len(priority[3]) {
+							start2 <- 3
+						}
+					} else if count2 == len(priority[1]) {
+						for range priority[2] {
+							start2 <- 2
+						}
+					} else if count2 == len(priority[1])+len(priority[2]) {
+						for range priority[3] {
+							start2 <- 3
+						}
+					}
+				} else if available1 == 0 {
 					return nil, 0
 				}
 			}
@@ -305,6 +318,10 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 
 func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, ruleBased bool, req *http.Request, mode, network, dest, host, port string,
 	timeout, total, route, server int, start, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
+	if route == 1 {
+		doRemote(bufIn, conn, out, firstOut, full, ruleBased, req, mode, network, dest, host, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
+		return
+	}
 	for {
 		select {
 		case s := <-start:
@@ -312,7 +329,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 				start <- 0
 				return
 			}
-			if s != server {
+			if s != socks[server-1].pri {
 				start <- s
 			} else {
 				doRemote(bufIn, conn, out, firstOut, full, ruleBased, req, mode, network, dest, host, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
@@ -334,7 +351,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 		logger.Printf("%s %5d:  *          %d Dialing to %s %s", mode, total, route, network, dp)
 		*out, err = net.DialTimeout(network, dp, time.Second*time.Duration(timeout))
 	} else {
-		dialer, err1 := proxy.SOCKS5("tcp", socks[server-1], nil, &net.Dialer{Timeout: time.Second * time.Duration(timeout)})
+		dialer, err1 := proxy.SOCKS5("tcp", socks[server-1].addr, nil, &net.Dialer{Timeout: time.Second * time.Duration(timeout)})
 		if err1 != nil {
 			logger.Printf("%s %5d: ERR         %d Failed to dial SOCKS server %s. Error: %s", mode, total, route, socks[server-1], err)
 			try <- 0
@@ -345,7 +362,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 		} else {
 			dp = net.JoinHostPort(dest, port)
 		}
-		logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", mode, total, route, network, dp, socks[server-1])
+		logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", mode, total, route, network, dp, socks[server-1].addr)
 		*out, err = dialer.Dial(network, dp)
 	}
 	// Binding to interface is not available on Go natively, you have to use raw methods for each platform (SO_BINDTODEVICE on Linux, bind() on Windows) and do communication in raw
