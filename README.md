@@ -76,19 +76,31 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
 
 - Transparent proxy (Linux only)
 
-  Both TPROXY (use -t option) and REDIRECT modes are supported. You need to redirect the traffic to Turnout using iptables first. TPROXY mode is faster than REDIRECT but TPROXY kernel module may be missing on some old systems. On standard kernels, TPROXY is available since 2.6.28 and supports IPv6 since 2.6.37.
+  Both TPROXY (use -t option) and REDIRECT modes are supported. You need to redirect the traffic to Turnout using iptables. 
   
-  This command starts a transparent proxy at port 2222 and sets 127.0.0.1:1080 as upstream SOCKS5 proxy. Connections with download speed less than 100 kB/s will be added to slow list and routed via route 2 from the next connection.
+  REDIRECT mode is an old feature available on nearly all devices and also easy to configure. It supports IPv6 since kernel 3.7.
+  TPROXY mode is a bit faster than REDIRECT but TPROXY kernel module may be missing on some old systems. On standard kernels, TPROXY is available since 2.6.28 and supports IPv6 since 2.6.37.
   
-  ```
-  turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t -slow 100
+  This example starts a transparent proxy at port 2222 and sets 127.0.0.1:1080 as upstream SOCKS5 proxy. Connections with download speed less than 100 kB/s will be added to slow list and routed via route 2 from the next connection. Incoming LAN traffic from interface br0 to non-local addresses is redirected to the proxy.
+  
+  ```shell
+  # Start Turnout in the background
+  turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t -slow 100 &
+  
+  # Set up redirect for all outgoing traffic (if ipset is not available or you have a powerful CPU)
+  iptables -t mangle -A PREROUTING -i br0 ! -d 192.168.0.0/16 -m state --state NEW -p tcp -j CONNMARK --set-mark 1
+  iptables -t nat -A PREROUTING -i br0 -m connmark --mark 1 -j REDIRECT --to-ports 2222
+  
+  # Set up redirect for international traffic only (you must have ipset installed and a list called domestic which contains all domestic CIDRs)
+  iptables -t mangle -A PREROUTING -i br0 ! -d 192.168.0.0/16 -m state --state NEW -p tcp -m set ! --match-set domestic dst -j CONNMARK --set-mark 1
+  iptables -t nat -A PREROUTING -i br0 -m connmark --mark 1 -j REDIRECT --to-ports 2222
   ```
   
   Multiple SOCKS servers can be configured to provide fail-over function. 3 priority grades can be set and lower grade servers are only used if higher grade servers fail. In this example, 192.168.1.1:1080 is set as main server (with priority 1) and 192.168.2.1:1080 and 192.168.2.1:1081 are priority-2 servers. Once 192.168.1.1:1080 fails, these two servers will be tried at the same time and the faster one will convey the traffic.
   
   Please note that if these servers lead to different remote regions, you may experience issues with some websites or some region-specific content.
   
-  ```
+  ```shell
   turnout -b 0.0.0.0:2222 -s 192.168.1.1:1080 -s2 192.168.2.1:1080,192.168.2.1:1081 -t
   ```
   
@@ -96,7 +108,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
 
   This command starts an HTTP proxy at localhost's port 8080 and sets 127.0.0.1:1080 as upstream SOCKS5 proxy. Connections with download speed less than 100 kB/s will be added to slow list and routed via route 2 from the next connection.
   
-  ```
+  ```shell
   turnout -h 127.0.0.1:8080 -s 127.0.0.1:1080 -slow 100
   ```
 
@@ -113,7 +125,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
     By the proxy nature Turnout uses a large number of connections and is hence very likely to reach the limit. You are strongly advised to increase that number. 
     For example this command sets limit to 10000 and starts Turnout if successful.
     
-    ```
+    ```shell
     ulimit -n 10000 && turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t
     ```
     
@@ -136,7 +148,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
     
   - Unreliable ISP
   
-    Turnout is not supposed to be using with unreliable ISPs. If your ISP can't provide acceptable quality in international or cross-ISP connections, your better choice is an IP/CIDR based routing plan. Because in that case any benefit from automatic routing will be erased by the poor network condition.
+    Turnout is not supposed to be using with highly unreliable ISPs. If your ISP can't provide at least acceptable quality in international or cross-ISP connections, your better choice is an IP/CIDR based routing plan. Because in that case any benefit from automatic routing will be erased by the poor network condition.
     
 ### Credits
 
