@@ -89,11 +89,17 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
   # Set up redirect for all outgoing traffic (if ipset is not available or you have a powerful CPU)
   iptables -t mangle -A PREROUTING -i br0 ! -d 192.168.0.0/16 -m state --state NEW -p tcp -j CONNMARK --set-mark 1
-  iptables -t nat -A PREROUTING -i br0 -m connmark --mark 1 -j REDIRECT --to-ports 2222
+  iptables -t nat -A PREROUTING -i br0 -m connmark --mark 1 -p tcp -j REDIRECT --to-ports 2222
   
   # Set up redirect for international traffic only (you must have ipset installed and a list called domestic which contains all domestic CIDRs)
   iptables -t mangle -A PREROUTING -i br0 ! -d 192.168.0.0/16 -m state --state NEW -p tcp -m set ! --match-set domestic dst -j CONNMARK --set-mark 1
-  iptables -t nat -A PREROUTING -i br0 -m connmark --mark 1 -j REDIRECT --to-ports 2222
+  iptables -t nat -A PREROUTING -i br0 -m connmark --mark 1 -p tcp -j REDIRECT --to-ports 2222
+  
+  # Alternatively, set up TPROXY for all outgoing traffic
+  iptables -t mangle -A PREROUTING -i br0 ! -d 192.168.0.0/16 -m state --state NEW -p tcp -j CONNMARK --set-mark 1
+  iptables -t mangle -A PREROUTING -i br0 -m connmark --mark 1 -p tcp -j TPROXY --on-port 2222 --tproxy-mark 1
+  ip rule add fwmark 1 table 100
+  ip route add local 0.0.0.0/0 dev lo table 100
   ```
   
   Multiple SOCKS servers can be configured to provide fail-over function. 3 priority grades can be set and lower grade servers are only used if higher grade servers fail. In this example, 192.168.1.1:1080 is set as main server (with priority 1) and 192.168.2.1:1080 and 192.168.2.1:1081 are priority-2 servers. Once 192.168.1.1:1080 fails, these two servers will be tried at the same time and the faster one will convey the traffic.
