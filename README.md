@@ -76,9 +76,9 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
 
 - Transparent proxy (Linux only)
 
-  Both TPROXY (use -t option) and REDIRECT modes are supported. You need to redirect the traffic using iptables. TPROXY mode is faster then REDIRECT but TPROXY kernel module may be missing on some old systems. On standard kernels, TPROXY is available since 2.6.28 and supports IPv6 since 2.6.37.
+  Both TPROXY (use -t option) and REDIRECT modes are supported. You need to redirect the traffic to Turnout using iptables first. TPROXY mode is faster than REDIRECT but TPROXY kernel module may be missing on some old systems. On standard kernels, TPROXY is available since 2.6.28 and supports IPv6 since 2.6.37.
   
-  This command starts a transparent proxy at port 2222 and sets 127.0.0.1:1080 as upstream SOCKS5 proxy. Connections with download speed less than 100 kB/s will be added to slow list and routed via route 2 on next connection.
+  This command starts a transparent proxy at port 2222 and sets 127.0.0.1:1080 as upstream SOCKS5 proxy. Connections with download speed less than 100 kB/s will be added to slow list and routed via route 2 from the next connection.
   
   ```
   turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t -slow 100
@@ -133,6 +133,10 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
     In transparent proxy mode, for any traffic sent over route 2, Turnout tries to sniff hostnames from the first packet and send them instead of IPs to SOCKS proxies to allow name resolution on the remote side, so that the speed is not affected by the local DNS result.
     
     HTTP and TLS are supported but TLS with ESNI is not because of the encrypted hostname. That is to say, with ESNI the transmission speed may not be as fast as it should be. Cloudflare supports ESNI since 2018 but among major browsers only Firefox Nightly currently supports it.
+    
+  - Unreliable ISP
+  
+    Turnout is not supposed to be using with unreliable ISPs. If your ISP can't provide acceptable quality in international or cross-ISP connections, your better choice is an IP/CIDR based routing plan. Because in that case any benefit from automatic routing will be erased by the poor network condition.
     
 ### Credits
 
