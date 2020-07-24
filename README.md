@@ -56,25 +56,27 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
   ✔ Save traffic to minimum
   
-  ✔ No list
+  ✔ No list is needed
   
   ✔ No learning curve
   
-  ✔ Work as both HTTP proxy (all platforms) and transparent proxy (Linux only)
+  ✔ Work as both an HTTP proxy (all platforms) and a transparent proxy (Linux only)
   
   ✔ Slow connection detection
   
-  ✔ Sniff hostnames and use in route 2 for better speed (transparent proxy mode)
+  ✔ Sniff hostnames for better speed over route 2 (transparent proxy mode)
   
   ✔ Live with bogus DNS results from ISP
   
-  ❌ No UDP, no DNS and tunneling tools integrated, just do routing
+  ✔ Multiple SOCKS servers and customizable fail-over solution
   
-### Usage
+  ❌ No UDP, no DNS and tunneling tools integrated (routing only)
+  
+### Basic usage
 
 - Transparent proxy (Linux only)
 
-  Both TPROXY (use -t option) and REDIRECT modes are supported. You need to redirect the traffic using iptables. TPROXY mode is faster then REDIRECT but TPROXY kernel module may be missing on some old systems.
+  Both TPROXY (use -t option) and REDIRECT modes are supported. You need to redirect the traffic using iptables. TPROXY mode is faster then REDIRECT but TPROXY kernel module may be missing on some old systems. On standard kernels, TPROXY is available since 2.6.28 and supports IPv6 since 2.6.37.
   
   This command starts a transparent proxy at port 2222 and sets 127.0.0.1:1080 as upstream SOCKS5 proxy. Connections with download speed less than 100 kB/s will be added to slow list and routed via route 2 on next connection.
   
@@ -82,13 +84,25 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t -slow 100
   ```
   
+  Multiple SOCKS servers can be configured to provide fail-over function. 3 priority grades can be set and lower grade servers are only used if higher grade servers fail. In this example, 192.168.1.1:1080 is set as main server (with priority 1) and 192.168.2.1:1080 and 192.168.2.1:1081 are priority-2 servers. Once 192.168.1.1:1080 fails, these two servers will be tried at the same time and the faster one will convey the traffic.
+  
+  Please note that if these servers lead to different remote regions, you may experience issues with some websites or some region-specific content.
+  
+  ```
+  turnout -b 0.0.0.0:2222 -s 192.168.1.1:1080 -s2 192.168.2.1:1080,192.168.2.1:1081 -t
+  ```
+  
 - HTTP proxy
 
-  This command starts an HTTP proxy at localhost's port 8080 and sets 127.0.0.1:1080 as upstream SOCKS5 proxy. Connections with download speed less than 100 kB/s will be added to slow list and routed via route 2 on next connection.
+  This command starts an HTTP proxy at localhost's port 8080 and sets 127.0.0.1:1080 as upstream SOCKS5 proxy. Connections with download speed less than 100 kB/s will be added to slow list and routed via route 2 from the next connection.
   
   ```
   turnout -h 127.0.0.1:8080 -s 127.0.0.1:1080 -slow 100
   ```
+
+- IP and host lists
+
+  Turnout is supposed to be doing routing automatically without the help of any list. But it still supports these lists for the use by advanced users. Please refer to the sample lists to learn about the format.
   
 ### Known issues
 
@@ -107,6 +121,18 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
     In some circumstances, the server (or some intermediary) may cut the connection before it should close. 
     Due to TLS connections' encrypted nature, Turnout may not be able to tell if the closure is normal and thus cannot identify the blockage.
+    
+  - DNS
+  
+    Turnout is written with the assumption that DNS results can be bogus. Generally speaking, if a bogus result leads to nowhere, Turnout can detect it and use route 2 automatically. However, there are some circumstances that Turnout might need your help, such as in a plain text HTTP hijack. In case that Turnout is unable to tell there's a hijack, you might need to add a rule for that IP. 
+    
+    If you have set up a reliable nameserver as system resolver, you are very welcome to use it but you also need to make sure it is optimized for CDNs in the main route. Please use -dnsok option to assert the results are genuine so that Turnout can skip some unnecessary checks.
+    
+  - Encrypted SNI (ESNI)
+  
+    In transparent proxy mode, for any traffic sent over route 2, Turnout tries to sniff hostnames from the first packet and send them instead of IPs to SOCKS proxies to allow name resolution on the remote side, so that the speed is not affected by the local DNS result.
+    
+    HTTP and TLS are supported but TLS with ESNI is not because of the encrypted hostname. That is to say, with ESNI the transmission speed may not be as fast as it should be. Cloudflare supports ESNI since 2018 but among major browsers only Firefox Nightly currently supports it.
     
 ### Credits
 
