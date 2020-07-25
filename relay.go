@@ -21,10 +21,10 @@ import (
 
 const (
 	initialSize   = 5000
-	bufferSize    = 10000  // For speed check only
-	sampleSize    = 100000 // Download size for slowness detection, smaller size may be inaccurate
-	sampleTime    = 10     // Due to slow start, assessing the speed too early can be inaccurate, at least wait for this many seconds
-	blockSafeTime = 15     // After this many seconds it is less likely to be blocked by TCP RESET
+	bufferSize    = 10000 // For speed check only
+	sampleSize    = 50000 // Download size for slowness detection, smaller size may be inaccurate
+	sampleTime    = 10    // Due to slow start, assessing the speed too early can be inaccurate, at least wait for this many seconds
+	blockSafeTime = 10    // After this many seconds it is less likely to be blocked by TCP RESET
 )
 
 var (
@@ -341,7 +341,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 	} else {
 		dialer, err1 := proxy.SOCKS5("tcp", socks[server-1].addr, nil, &net.Dialer{Timeout: time.Second * time.Duration(timeout)})
 		if err1 != nil {
-			logger.Printf("%s %5d: ERR         %d Failed to dial SOCKS server %s. Error: %s", mode, total, route, socks[server-1], err)
+			logger.Printf("%s %5d: ERR         %d Failed to dial SOCKS server %s. Error: %s", mode, total, route, socks[server-1].addr, err)
 			try <- 0
 			return
 		}
@@ -407,6 +407,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 	/*if tcp, ok := (*out).(*net.TCPConn); ok {
 		tcp.SetLinger(0)
 	}*/
+	logger.Printf("%s %5d:  *          %d TCP connection established", mode, total, route)
 	mu.Lock()
 	open[route]++
 	mu.Unlock()
