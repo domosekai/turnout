@@ -1,8 +1,8 @@
 # Turnout
 
-Let's suppose for some reason your ISP is incapable to grant you reliable access to some websites. In such case, many of us ended up with a dual-connection plan.
+Let's suppose for some reason your ISP is incapable to grant you reliable access to some specific websites. In such case, many of us ended up with a dual-connection plan.
 
-A main connection provided by the ISP as is, is complemented by a second connection circumventing the weakness of the first. The second route is usually metered, and accessible via a SOCKS5 interface.
+A main connection provided by the ISP as is, is complemented by a second connection circumventing the problem of the first. The second route is usually metered, and accessible via a SOCKS5 interface.
 
 Turnout is aimed to give users smooth browsing experience while minimizing the traffic ($$) incurred on the metered connection, by doing smart routing in the background.
 
@@ -74,6 +74,8 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
 ### Basic usage
 
+  Note: Turnout is supposed to be deployed on local network. It is not safe or optimized to use it in a remote environment, such as a VPS.
+  
 - Transparent proxy (Linux only)
 
   Both TPROXY (use -t option) and REDIRECT modes are supported. You need to redirect the traffic to Turnout using iptables. 
@@ -162,8 +164,8 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
   Turnout has used these external packages, either directly or by modifying their code:
   
-  golang.org/x/crypto by Google
+  - golang.org/x/crypto by Google
   
-  golang.org/x/net by Google
+  - golang.org/x/net by Google
   
-  Avege by missdear (only to obtain original destinations)
+  - Avege by missdear (only to obtain original destinations)
