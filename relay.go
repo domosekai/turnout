@@ -21,8 +21,7 @@ import (
 
 const (
 	initialSize   = 5000
-	bufferSize    = 10000 // For speed check only
-	sampleSize    = 50000 // Download size for slowness detection, smaller size may be inaccurate
+	bufferSize    = 10000 // Not effective if speed detection is disabled (system default buffer size will be used)
 	sampleTime    = 10    // Due to slow start, assessing the speed too early can be inaccurate, at least wait for this many seconds
 	blockSafeTime = 10    // After this many seconds it is less likely to be blocked by TCP RESET
 )
@@ -553,7 +552,8 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 		*lastReq = time.Now()
 		logger.Printf("%s %5d:      *      %d Continue %s %s -> %s", mode, total, route, (*out).LocalAddr().Network(), (*out).LocalAddr(), (*out).RemoteAddr())
 		if mode == "H" && req != nil {
-			var totalBytes int64
+			var totalBytes, accum int64
+			accumStart := *lastReq
 			for {
 				var resp *http.Response
 				if firstResp != nil {
@@ -659,7 +659,12 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 						}
 					}
 				} else if resp.ContentLength != 0 && req.Method != "HEAD" {
-					bytes, err := receiveSend(conn, resp.Body, ruleBased, mode, dest, host, (*out).RemoteAddr(), total, route, lastReq)
+					if accumStart.Before(*lastReq) {
+						accumStart = *lastReq
+						accum = 0
+					}
+					bytes, err := receiveSend(conn, resp.Body, ruleBased, true, mode, dest, host, (*out).RemoteAddr(), total, route, lastReq, accum)
+					accum += bytes
 					totalBytes += bytes
 					resp.Body.Close()
 					if err != nil && !errors.Is(err, io.EOF) {
@@ -690,9 +695,8 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 			}
 		} else {
 			(*conn).Write(firstIn[:n])
-			totalBytes := int64(n)
-			bytes, err := receiveSend(conn, bufOut, ruleBased, mode, dest, host, (*out).RemoteAddr(), total, route, lastReq)
-			totalBytes += bytes + int64(bufOut.Buffered())
+			bytes, err := receiveSend(conn, bufOut, ruleBased, false, mode, dest, host, (*out).RemoteAddr(), total, route, lastReq, int64(n))
+			totalBytes := int64(n) + bytes + int64(bufOut.Buffered())
 			totalTime := time.Since(sentTime)
 			if err == nil || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "time") {
 				logger.Printf("%s %5d:          *  %d Remote connection closed. Received %d bytes in %.1f s", mode, total, route, totalBytes, totalTime.Seconds())
@@ -753,10 +757,12 @@ func matchIP(total int, mode string, ip net.IP) (route int, ruleBased bool) {
 	return
 }
 
-func receiveSend(conn *net.Conn, out io.Reader, ruleBased bool, mode, dest, host string, addr net.Addr, total, route int, lastReq *time.Time) (bytes int64, err error) {
+func receiveSend(conn *net.Conn, out io.Reader, ruleBased, single bool, mode, dest, host string, addr net.Addr, total, route int, lastReq *time.Time, lastBytes int64) (bytes int64, err error) {
 	if route == 1 && *slowSpeed > 0 && !ruleBased {
-		var sample, accum int64
-		var sampleStart, accumStart time.Time
+		var sample int64
+		accum := lastBytes
+		sampleStart := time.Now()
+		accumStart := *lastReq
 		var slow, added bool
 		for {
 			p := make([]byte, bufferSize)
@@ -767,7 +773,7 @@ func receiveSend(conn *net.Conn, out io.Reader, ruleBased bool, mode, dest, host
 				sampleStart = *lastReq
 				sample = 0
 			}
-			if accumStart.Before(*lastReq) {
+			if !single && accumStart.Before(*lastReq) {
 				accumStart = *lastReq
 				accum = 0
 			}
@@ -793,7 +799,7 @@ func receiveSend(conn *net.Conn, out io.Reader, ruleBased bool, mode, dest, host
 			sample += int64(n)
 			accum += int64(n)
 			// If n = bufferSize, either connection is too fast or client is slow
-			if time.Since(accumStart).Seconds() > sampleTime && sample >= sampleSize && n < bufferSize {
+			if time.Since(sampleStart).Seconds() > sampleTime && n < bufferSize {
 				speed := float64(sample) / 1000 / time.Since(sampleStart).Seconds()
 				aveSpeed := float64(accum) / 1000 / time.Since(accumStart).Seconds()
 				if !slow && (aveSpeed < float64(*slowSpeed) || speed < float64(*slowSpeed)*0.3) {
