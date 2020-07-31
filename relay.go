@@ -20,10 +20,11 @@ import (
 )
 
 const (
-	initialSize   = 5000
-	bufferSize    = 10000 // Not effective if speed detection is disabled (system default buffer size will be used)
-	sampleTime    = 10    // Due to slow start, assessing the speed too early can be inaccurate, at least wait for this many seconds
-	blockSafeTime = 10    // After this many seconds it is less likely to be blocked by TCP RESET
+	initialSize       = 5000
+	bufferSize        = 10000 // Not effective if speed detection is disabled (system default buffer size will be used)
+	minSampleInterval = 10
+	maxSampleInterval = 30
+	blockSafeTime     = 10 // After this many seconds it is less likely to be blocked by TCP RESET
 )
 
 var (
@@ -733,11 +734,18 @@ func matchHost(total int, mode, host string) (route int, ruleBased bool) {
 		if route != 0 {
 			logger.Printf("%s %5d:  *            Host rule matched for %s. Select route %d", mode, total, host, route)
 			ruleBased = true
+			return
 		}
 	}
-	if route == 0 && (blockedHostSet.contain(host) || slowHostSet.contain(host)) {
+	if blockedHostSet.contain(host) {
 		route = 2
-		logger.Printf("%s %5d: SET           Host %s found in blocked or slow list. Select route %d", mode, total, host, route)
+		logger.Printf("%s %5d: SET           Host %s found in blocked list. Select route %d", mode, total, host, route)
+		return
+	}
+	if slowHostSet.contain(host) {
+		route = 2
+		logger.Printf("%s %5d: SET           Host %s found in slow list. Select route %d", mode, total, host, route)
+		return
 	}
 	return
 }
@@ -748,11 +756,18 @@ func matchIP(total int, mode string, ip net.IP) (route int, ruleBased bool) {
 		if route != 0 {
 			logger.Printf("%s %5d:  *            IP rule matched for %s. Select route %d", mode, total, ip, route)
 			ruleBased = true
+			return
 		}
 	}
-	if route == 0 && (blockedIPSet.contain(ip) || slowIPSet.contain(ip)) {
+	if blockedIPSet.contain(ip) {
 		route = 2
-		logger.Printf("%s %5d: SET           IP %s found in blocked or slow list. Select route %d", mode, total, ip, route)
+		logger.Printf("%s %5d: SET           IP %s found in blocked list. Select route %d", mode, total, ip, route)
+		return
+	}
+	if slowIPSet.contain(ip) {
+		route = 2
+		logger.Printf("%s %5d: SET           IP %s found in slow list. Select route %d", mode, total, ip, route)
+		return
 	}
 	return
 }
@@ -798,12 +813,14 @@ func receiveSend(conn *net.Conn, out io.Reader, ruleBased, single bool, mode, de
 			}
 			sample += int64(n)
 			accum += int64(n)
+			t := time.Since(sampleStart).Seconds()
 			// If n = bufferSize, either connection is too fast or client is slow
-			if time.Since(sampleStart).Seconds() > sampleTime && n < bufferSize {
-				speed := float64(sample) / 1000 / time.Since(sampleStart).Seconds()
-				aveSpeed := float64(accum) / 1000 / time.Since(accumStart).Seconds()
-				if !slow && (aveSpeed < float64(*slowSpeed) || speed < float64(*slowSpeed)*0.3) {
-					logger.Printf("%s %5d:      *      %d Slow connection to %s %s at %.1f kB/s, average %.1f kB/s, %.1f s since last request", mode, total, route, host, addr, speed, aveSpeed, time.Since(accumStart).Seconds())
+			if t > minSampleInterval && n < bufferSize {
+				speed := float64(sample) / 1000 / t
+				t0 := time.Since(accumStart).Seconds()
+				aveSpeed := float64(accum) / 1000 / t0
+				if !slow && t < maxSampleInterval && (aveSpeed < float64(*slowSpeed) || speed < float64(*slowSpeed)*0.3) {
+					logger.Printf("%s %5d:      *      %d Slow connection to %s %s at %.1f kB/s, with average speed of %.1f kB/s since last request %.1f s ago", mode, total, route, host, addr, speed, aveSpeed, t0)
 					// Set flag to add to list only if this read is not the final one
 					slow = true
 				}
