@@ -26,7 +26,7 @@ type badStringError struct {
 
 func (e *badStringError) Error() string { return fmt.Sprintf("%s %q", e.what, e.str) }
 
-func readResponseHeader(r *bufio.Reader) (*http.Response, error) {
+func readResponseStatus(r *bufio.Reader) (*http.Response, error) {
 	tp := textproto.NewReader(r)
 	resp := &http.Response{}
 

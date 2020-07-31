@@ -500,15 +500,15 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 		} else {
 			logger.Printf("%s %5d:      *      %d First %d bytes from server. TTFB %d ms", mode, total, route, n, ttfb.Milliseconds())
 			if firstReq != nil {
-				if resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(firstIn[:n])), firstReq); err == nil {
-					logger.Printf("%s %5d:      *      %d HTTP Status %s Content-length %d", mode, total, route, resp.Status, resp.ContentLength)
+				if resp, err := readResponseStatus(bufio.NewReader(bytes.NewReader(firstIn[:n]))); err == nil {
+					logger.Printf("%s %5d:      *      %d HTTP Status %s", mode, total, route, resp.Status)
 					if route == 1 && !ruleBased && findRouteForText(resp.Status, httpRules, false) == 2 {
 						logger.Printf("%s %5d:     ERR     %d HTTP Status in blocklist", mode, total, route)
 						try <- 0
 						return
 					}
 				} else {
-					logger.Printf("%s %5d:     ERR     %d Malformed HTTP response. Error: %s", mode, total, route, err)
+					logger.Printf("%s %5d:     ERR     %d Bad HTTP response. Error: %s", mode, total, route, err)
 					if route == 1 && !ruleBased {
 						try <- 0
 						return
@@ -517,7 +517,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 			}
 			if tls && n > recordHeaderLen {
 				if !(recordType(firstIn[0]) == recordTypeHandshake && firstIn[recordHeaderLen] == typeServerHello) {
-					logger.Printf("%s %5d:     ERR     %d Malformed TLS Server Hello", mode, total, route)
+					logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake", mode, total, route)
 					if route == 1 && !ruleBased {
 						try <- 0
 						return
