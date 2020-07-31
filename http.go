@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const httpPipeline = 10
+const httpPipeline = 20
 
 func doHTTP(total *int) {
 	defer wg.Done()
@@ -142,6 +142,7 @@ func handleHTTP(conn net.Conn, total int) {
 			} else {
 				var err error
 				if out != nil {
+					ch <- req
 					_, err = (*out).Write(header)
 				}
 				if out == nil || err != nil {
@@ -152,8 +153,6 @@ func handleHTTP(conn net.Conn, total int) {
 						rejectHTTP(&conn)
 						continue
 					}
-				} else {
-					ch <- req
 				}
 			}
 			if req.ContentLength == -1 && len(req.TransferEncoding) > 0 && req.TransferEncoding[0] == "chunked" {

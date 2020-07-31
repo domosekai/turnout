@@ -24,7 +24,7 @@ const (
 	bufferSize        = 10000 // Not effective if speed detection is disabled (system default buffer size will be used)
 	minSampleInterval = 10
 	maxSampleInterval = 30
-	minSpeed          = 1  // Speed below this kB/s is likely to have other purposes
+	minSpeed          = 3  // Speed below this kB/s is likely to have other purposes
 	blockSafeTime     = 10 // After this many seconds it is less likely to be blocked by TCP RESET
 )
 
@@ -102,7 +102,7 @@ func normalizeHostname(host, defaultPort string) (string, string) {
 	return h, defaultPort
 }
 
-func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firstReq *http.Request, req chan *http.Request, mode, network, dest, host, port string,
+func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
 	successive bool, total int, connection, tls bool, lastReq *time.Time) (*net.Conn, int) {
 	start1 := make(chan int, 1)
 	start2 := make(chan int, len(socks))
@@ -169,12 +169,12 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firs
 	}
 	totalTimeout := 1
 	if route != 2 {
-		go handleRemote(bufIn, conn, &out1, first, full, ruleBased, firstReq, req, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start1, try1, do1, stop2, connection, tls, lastReq)
+		go handleRemote(bufIn, conn, &out1, first, full, ruleBased, firstReq, reqs, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start1, try1, do1, stop2, connection, tls, lastReq)
 		totalTimeout += int(*r1Timeout)
 	}
 	if route != 1 {
 		for i := range socks {
-			go handleRemote(bufIn, conn, &out2[i], first, full, ruleBased, firstReq, req, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start2, try2, do2, stop2, connection, tls, lastReq)
+			go handleRemote(bufIn, conn, &out2[i], first, full, ruleBased, firstReq, reqs, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start2, try2, do2, stop2, connection, tls, lastReq)
 			totalTimeout += int(*r2Timeout)
 		}
 	}
@@ -314,13 +314,13 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 	(*out).Close()
 }
 
-func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, ruleBased bool, firstReq *http.Request, req chan *http.Request, mode, network, dest, host, port string,
+func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
 	timeout, total, route, server int, start, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
 	for {
 		select {
 		case s := <-start:
 			if route == 1 && s == 1 || route == 2 && s == socks[server-1].pri {
-				doRemote(bufIn, conn, out, firstOut, full, ruleBased, firstReq, req, mode, network, dest, host, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
+				doRemote(bufIn, conn, out, firstOut, full, ruleBased, firstReq, reqs, mode, network, dest, host, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
 				return
 			}
 			start <- s
@@ -551,6 +551,12 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 	doServer := <-do
 	do <- doServer
 	if doServer == server {
+		// Drain channel so that sender will not block
+		defer func() {
+			for len(reqs) > 0 {
+				<-reqs
+			}
+		}()
 		*lastReq = time.Now()
 		logger.Printf("%s %5d:      *      %d Continue %s %s -> %s", mode, total, route, (*out).LocalAddr().Network(), (*out).LocalAddr(), (*out).RemoteAddr())
 		if mode == "H" && firstReq != nil {
@@ -563,11 +569,10 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 					firstResp = nil
 				} else {
 					var err error
-					if _, err = bufOut.ReadByte(); err == nil {
+					if _, err = bufOut.ReadByte(); err == nil && len(reqs) > 0 {
 						bufOut.UnreadByte()
 						resp, err = http.ReadResponse(bufOut, <-reqs)
-					}
-					if err != nil {
+					} else {
 						totalTime := time.Since(sentTime)
 						if errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "closed") {
 							logger.Printf("H %5d:          *  %d Remote connection closed. Received %d bytes in %.1f s", total, route, totalBytes, totalTime.Seconds())
@@ -588,12 +593,19 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 								}
 							}
 						} else {
+							if err == nil {
+								err = errors.New("HTTP response with no matching request")
+							}
 							logger.Printf("H %5d:         ERR %d Remote connection closed. Received %d bytes in %.1f s. Error: %s", total, route, totalBytes, totalTime.Seconds(), err)
 						}
 						mu.Lock()
 						received[route] += totalBytes
 						mu.Unlock()
-						break
+						(*out).Close()
+						if len(reqs) > 0 {
+							(*conn).Close()
+						}
+						return
 					}
 					logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d", total, route, resp.Status, resp.ContentLength)
 				}
