@@ -17,6 +17,8 @@ import (
 	"time"
 )
 
+const httpPipeline = 10
+
 func doHTTP(total *int) {
 	defer wg.Done()
 	addr, err := net.ResolveTCPAddr("tcp", *httpAddr)
@@ -59,6 +61,7 @@ func handleHTTP(conn net.Conn, total int) {
 	logger.Printf("H %5d:  *            New %s %s -> %s", total, conn.LocalAddr().Network(), conn.RemoteAddr(), conn.LocalAddr())
 	bufIn := bufio.NewReader(conn)
 	var lastReq time.Time
+	var ch chan *http.Request
 
 	for {
 		req, err := http.ReadRequest(bufIn)
@@ -128,7 +131,8 @@ func handleHTTP(conn net.Conn, total int) {
 				if out != nil {
 					(*out).Close()
 				}
-				if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out != nil {
+				ch = make(chan *http.Request, httpPipeline)
+				if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, ch, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out != nil {
 					new = false
 				} else {
 					bufIn.Discard(bufIn.Buffered())
@@ -141,12 +145,15 @@ func handleHTTP(conn net.Conn, total int) {
 					_, err = (*out).Write(header)
 				}
 				if out == nil || err != nil {
-					if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out == nil {
+					ch = make(chan *http.Request, httpPipeline)
+					if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, ch, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out == nil {
 						logger.Printf("H %5d: ERR           Failed to send HTTP header to server. Error: %s", total, err)
 						bufIn.Discard(bufIn.Buffered())
 						rejectHTTP(&conn)
 						continue
 					}
+				} else {
+					ch <- req
 				}
 			}
 			if req.ContentLength == -1 && len(req.TransferEncoding) > 0 && req.TransferEncoding[0] == "chunked" {
