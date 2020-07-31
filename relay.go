@@ -574,7 +574,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 						resp, err = http.ReadResponse(bufOut, <-reqs)
 					} else {
 						totalTime := time.Since(sentTime)
-						if errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "closed") {
+						if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "closed") {
 							logger.Printf("H %5d:          *  %d Remote connection closed. Received %d bytes in %.1f s", total, route, totalBytes, totalTime.Seconds())
 							if route == 1 && !ruleBased && totalTime.Seconds() > 30 && totalBytes < 1000 {
 								logger.Printf("H %5d:         ERR %d Suspiciously blocked connection to %s %s. %.1f s since last request", total, route, host, (*out).RemoteAddr(), time.Since(*lastReq).Seconds())
