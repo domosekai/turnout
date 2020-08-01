@@ -34,7 +34,7 @@ func doHTTP(total *int) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			logger.Printf("HTTP listener failed to accept new connection. Error: %s", err)
+			logger.Printf("Failed to accept new connection. Error: %s", err)
 			continue
 		}
 		mu.Lock()

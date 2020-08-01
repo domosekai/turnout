@@ -144,7 +144,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firs
 		}
 	}
 
-	// Dispatch goroutines
+	// Dispatch workers
 	net1 := network
 	net2 := network
 	if *force4 {
@@ -162,7 +162,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firs
 		}
 	}
 
-	// Send signal to goroutines
+	// Send signal to workers
 	switch route {
 	case -1:
 		return nil, 0
@@ -588,7 +588,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 						if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "closed") {
 							logger.Printf("H %5d:          *  %d Remote connection closed. Received %d bytes in %.1f s", total, route, totalBytes, totalTime.Seconds())
 							if route == 1 && !ruleBased && totalTime.Seconds() > 30 && totalBytes < 1000 {
-								logger.Printf("H %5d:         ERR %d Suspiciously blocked connection to %s %s. %.1f s since last request", total, route, host, (*out).RemoteAddr(), time.Since(*lastReq).Seconds())
+								logger.Printf("H %5d:         ERR %d Suspiciously blocked connection to %s %s, %.1f s since last request", total, route, host, (*out).RemoteAddr(), time.Since(*lastReq).Seconds())
 								/*if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 									logger.Printf("H %5d:         SET %d %s added to blocked list", total, route, tcpAddr.IP)
 									blocked.add(tcpAddr.IP)
@@ -658,7 +658,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 						logger.Printf("H %5d:      *      %d Parsed %d chunks and %d bytes", total, route, n, bytes)
 					} else {
 						if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
-							logger.Printf("H %5d:     RST     %d Chunks parsing is reset by server. %.1f s since last request. Error: %s", total, route, time.Since(*lastReq).Seconds(), err)
+							logger.Printf("H %5d:     RST     %d Chunks parsing was reset by server, %.1f s since last request. Error: %s", total, route, time.Since(*lastReq).Seconds(), err)
 							if route == 1 && !ruleBased && time.Since(*lastReq).Seconds() < blockSafeTime {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 									logger.Printf("H %5d:     SET     %d %s %s added to blocked list", total, route, host, tcpAddr.IP)
@@ -699,7 +699,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 						// Linux: "read: connection reset by peer"
 						// Windows: "wsarecv: An existing connection was forcibly closed by the remote host."
 						if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
-							logger.Printf("H %5d:     RST     %d Reading HTTP body gets reset by server. %.1f s since last request. Error: %s", total, route, time.Since(*lastReq).Seconds(), err)
+							logger.Printf("H %5d:     RST     %d Fetching HTTP body was reset by server, %.1f s since last request. Error: %s", total, route, time.Since(*lastReq).Seconds(), err)
 							if route == 1 && !ruleBased && time.Since(*lastReq).Seconds() < blockSafeTime {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 									logger.Printf("H %5d:     SET     %d %s %s added to blocked list", total, route, host, tcpAddr.IP)
@@ -842,12 +842,12 @@ func receiveSend(conn *net.Conn, out io.Reader, ruleBased, single bool, mode, de
 			accum += int64(n)
 			t := time.Since(sampleStart).Seconds()
 			// If n = bufferSize, either connection is too fast or client is slow
-			if t > minSampleInterval && n < bufferSize {
+			if !slow && t > minSampleInterval && n < bufferSize {
 				speed := float64(sample) / 1000 / t
 				t0 := time.Since(accumStart).Seconds()
 				aveSpeed := float64(accum) / 1000 / t0
 				if t < maxSampleInterval && (aveSpeed < float64(*slowSpeed) || speed < float64(*slowSpeed)*0.3) && aveSpeed > minSpeed && speed > minSpeed {
-					logger.Printf("%s %5d:      *      %d Slow connection to %s %s at %.1f kB/s, with average speed of %.1f kB/s since last request %.1f s ago", mode, total, route, host, addr, speed, aveSpeed, t0)
+					logger.Printf("%s %5d:      *      %d Slow connection to %s %s at %.1f kB/s, average %.1f kB/s since last request %.1f s ago", mode, total, route, host, addr, speed, aveSpeed, t0)
 					// Set flag to add to list only if this read is not the final one
 					slow = true
 				}
