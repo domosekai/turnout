@@ -56,7 +56,8 @@ var (
 	logger   *log.Logger
 	wg       sync.WaitGroup
 	mu       sync.Mutex
-	open     [3]int
+	open     [3]int // open connections
+	jobs     [3]int // working goroutines
 	sent     [3]int64
 	received [3]int64
 	socks    []server
@@ -168,6 +169,7 @@ func main() {
 				logger.Printf("STATUS Open connections: Local %d Remote %d / %d", open[0], open[1], open[2])
 				logger.Printf("STATUS Route 1 Sent %.1f MB Recv %.1f MB / Route 2 Sent %.1f MB Recv %.1f MB",
 					float64(sent[1])/1000000, float64(received[1])/1000000, float64(sent[2])/1000000, float64(received[2])/1000000)
+				logger.Printf("STATUS Working goroutines: Dispatchers %d Workers %d / %d", jobs[0], jobs[1], jobs[2])
 			}
 		}()
 	}

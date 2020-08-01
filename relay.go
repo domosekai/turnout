@@ -104,6 +104,14 @@ func normalizeHostname(host, defaultPort string) (string, string) {
 
 func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
 	successive bool, total int, connection, tls bool, lastReq *time.Time) (*net.Conn, int) {
+	mu.Lock()
+	jobs[0]++
+	mu.Unlock()
+	defer func() {
+		mu.Lock()
+		jobs[0]--
+		mu.Unlock()
+	}()
 	start := make([]chan bool, 4) // one channel for each route / priority
 	for i := range start {
 		start[i] = make(chan bool)
@@ -320,12 +328,18 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 
 func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
 	timeout, total, route, server int, start chan bool, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
+	mu.Lock()
+	jobs[route]++
+	mu.Unlock()
 	select {
 	case <-start:
 		doRemote(bufIn, conn, out, firstOut, full, ruleBased, firstReq, reqs, mode, network, dest, host, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
 	case s := <-do:
 		do <- s
 	}
+	mu.Lock()
+	jobs[route]--
+	mu.Unlock()
 }
 
 func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
