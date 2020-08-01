@@ -22,8 +22,8 @@ import (
 const (
 	initialSize       = 5000
 	bufferSize        = 10000 // Not effective if speed detection is disabled (system default buffer size will be used)
-	minSampleInterval = 10
-	maxSampleInterval = 30
+	minSampleInterval = 5     // Due to slow start, this seconds are needed for meaningful speed detection
+	maxSampleInterval = 20
 	minSpeed          = 3  // Speed below this kB/s is likely to have other purposes
 	blockSafeTime     = 10 // After this many seconds it is less likely to be blocked by TCP RESET
 )
@@ -104,8 +104,10 @@ func normalizeHostname(host, defaultPort string) (string, string) {
 
 func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
 	successive bool, total int, connection, tls bool, lastReq *time.Time) (*net.Conn, int) {
-	start1 := make(chan int, 1)
-	start2 := make(chan int, len(socks))
+	start := make([]chan bool, 4) // one channel for each route / priority
+	for i := range start {
+		start[i] = make(chan bool)
+	}
 	try1 := make(chan int, 1)
 	try2 := make(chan int, len(socks))
 	stop2 := make(chan bool, 1)
@@ -134,34 +136,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firs
 		}
 	}
 
-	switch route {
-	case -1:
-		return nil, 0
-	case 0:
-		start1 <- 1
-		if !successive {
-			for range priority[1] {
-				start2 <- 1
-			}
-		}
-		available1 = 1
-		available2 = len(socks)
-	case 1:
-		start1 <- 1
-		available1 = 1
-		available2 = 0
-	case 2:
-		if !successive {
-			for range priority[1] {
-				start2 <- 1
-			}
-		} else {
-			start2 <- 1
-		}
-		available1 = 0
-		available2 = len(socks)
-	}
-
+	// Dispatch goroutines
 	net1 := network
 	net2 := network
 	if *force4 {
@@ -169,18 +144,47 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firs
 	}
 	totalTimeout := 1
 	if route != 2 {
-		go handleRemote(bufIn, conn, &out1, first, full, ruleBased, firstReq, reqs, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start1, try1, do1, stop2, connection, tls, lastReq)
+		go handleRemote(bufIn, conn, &out1, first, full, ruleBased, firstReq, reqs, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start[0], try1, do1, stop2, connection, tls, lastReq)
 		totalTimeout += int(*r1Timeout)
 	}
 	if route != 1 {
-		for i := range socks {
-			go handleRemote(bufIn, conn, &out2[i], first, full, ruleBased, firstReq, reqs, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start2, try2, do2, stop2, connection, tls, lastReq)
+		for i, v := range socks {
+			go handleRemote(bufIn, conn, &out2[i], first, full, ruleBased, firstReq, reqs, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start[v.pri], try2, do2, stop2, connection, tls, lastReq)
 			totalTimeout += int(*r2Timeout)
 		}
 	}
 
+	// Send signal to goroutines
+	switch route {
+	case -1:
+		return nil, 0
+	case 0:
+		start[0] <- true
+		if !successive {
+			for range priority[1] {
+				start[1] <- true
+			}
+		}
+		available1 = 1
+		available2 = len(socks)
+	case 1:
+		start[0] <- true
+		available1 = 1
+		available2 = 0
+	case 2:
+		if !successive {
+			for range priority[1] {
+				start[1] <- true
+			}
+		} else {
+			start[1] <- true
+		}
+		available1 = 0
+		available2 = len(socks)
+	}
+
 	// Wait for first byte from server
-	timer1 := time.NewTimer(time.Second * time.Duration(*r1Priority)) // during which route 1 is prioritized
+	timer1 := time.NewTimer(time.Duration(float64(time.Second) * *r1Priority)) // during which route 1 is prioritized
 	timer2 := time.NewTimer(time.Second * time.Duration(totalTimeout))
 	wait := true
 	var server2 int
@@ -207,7 +211,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firs
 			available1--
 			if available2 > 0 {
 				if successive {
-					start2 <- 1
+					start[1] <- true
 				}
 				if server2 > 0 {
 					do2 <- server2
@@ -236,19 +240,19 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firs
 				if available2 > 0 && server2 == 0 {
 					if successive {
 						if count2 < len(priority[1]) {
-							start2 <- 1
+							start[1] <- true
 						} else if count2 < len(priority[1])+len(priority[2]) {
-							start2 <- 2
+							start[2] <- true
 						} else if count2 < len(priority[1])+len(priority[2])+len(priority[3]) {
-							start2 <- 3
+							start[3] <- true
 						}
 					} else if count2 == len(priority[1]) {
 						for range priority[2] {
-							start2 <- 2
+							start[2] <- true
 						}
 					} else if count2 == len(priority[1])+len(priority[2]) {
 						for range priority[3] {
-							start2 <- 3
+							start[3] <- true
 						}
 					}
 				} else if available1 == 0 {
@@ -315,19 +319,12 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 }
 
 func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
-	timeout, total, route, server int, start, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
-	for {
-		select {
-		case s := <-start:
-			if route == 1 && s == 1 || route == 2 && s == socks[server-1].pri {
-				doRemote(bufIn, conn, out, firstOut, full, ruleBased, firstReq, reqs, mode, network, dest, host, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
-				return
-			}
-			start <- s
-		case s := <-do:
-			do <- s
-			return
-		}
+	timeout, total, route, server int, start chan bool, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
+	select {
+	case <-start:
+		doRemote(bufIn, conn, out, firstOut, full, ruleBased, firstReq, reqs, mode, network, dest, host, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
+	case s := <-do:
+		do <- s
 	}
 }
 
