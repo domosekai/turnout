@@ -14,14 +14,14 @@ import (
 )
 
 const (
-	VersionTLS10 = 0x0301
-	VersionTLS11 = 0x0302
-	VersionTLS12 = 0x0303
-	VersionTLS13 = 0x0304
+	versionTLS10 = 0x0301
+	versionTLS11 = 0x0302
+	versionTLS12 = 0x0303
+	versionTLS13 = 0x0304
 
 	// Deprecated: SSLv3 is cryptographically broken, and is no longer
 	// supported by this package. See golang.org/issue/32716.
-	VersionSSL30 = 0x0300
+	versionSSL30 = 0x0300
 )
 
 const (
@@ -134,7 +134,7 @@ type clientHelloMsg struct {
 	raw                          []byte
 	vers                         uint16
 	random                       []byte
-	sessionId                    []byte
+	sessionID                    []byte
 	cipherSuites                 []uint16
 	compressionMethods           []uint8
 	serverName                   string
@@ -148,7 +148,7 @@ func (m *clientHelloMsg) unmarshal(data []byte) bool {
 
 	if !s.Skip(4) || // message type and uint24 length field
 		!s.ReadUint16(&m.vers) || !s.ReadBytes(&m.random, 32) ||
-		!readUint8LengthPrefixed(&s, &m.sessionId) {
+		!readUint8LengthPrefixed(&s, &m.sessionID) {
 		return false
 	}
 

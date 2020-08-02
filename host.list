@@ -6,7 +6,7 @@
 // In transparent proxy mode, hostnames are sniffed from HTTP and TLS packets.
 // However, this might not always work, such as due to encrypted SNI.
 
-// Rules are matched in order and have higher priority than IP rules.
+// Rules are matched from top to bottom and have higher priority than IP rules.
 // Destinations with specific routes are exempt from speed check.
 
 // Format (Remove the leading // to take effect)

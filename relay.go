@@ -151,11 +151,11 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firs
 		net1 = "tcp4"
 	}
 	totalTimeout := 1
-	if route != 2 {
+	if route == 0 || route == 1 {
 		go handleRemote(bufIn, conn, &out1, first, full, ruleBased, firstReq, reqs, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start[0], try1, do1, stop2, connection, tls, lastReq)
 		totalTimeout += int(*r1Timeout)
 	}
-	if route != 1 {
+	if route == 0 || route == 2 {
 		for i, v := range socks {
 			go handleRemote(bufIn, conn, &out2[i], first, full, ruleBased, firstReq, reqs, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start[v.pri], try2, do2, stop2, connection, tls, lastReq)
 			totalTimeout += int(*r2Timeout)
@@ -164,8 +164,6 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firs
 
 	// Send signal to workers
 	switch route {
-	case -1:
-		return nil, 0
 	case 0:
 		start[0] <- true
 		if !successive {
@@ -189,6 +187,8 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firs
 		}
 		available1 = 0
 		available2 = len(socks)
+	default:
+		return nil, 0
 	}
 
 	// Wait for first byte from server
@@ -430,24 +430,26 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 		mu.Unlock()
 	}()
 
-	// Match IP rules
 	destIsIP := net.ParseIP(dest) != nil
 	if host == "" && !destIsIP {
 		host = dest
 	}
+
+	// Match IP rules in HTTP proxy mode if DNS is trusted
 	if route == 1 && !ruleBased && *dnsOK && !destIsIP {
 		// dest is hostname
 		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
 			newRoute, ruleBased = matchIP(total, mode, tcpAddr.IP)
 			switch newRoute {
-			case -1:
-				stop2 <- true
-				try <- 0
-				return
+			case 0:
 			case 1:
 				stop2 <- true
 			case 2:
+				try <- 0
+				return
+			default:
+				stop2 <- true
 				try <- 0
 				return
 			}
@@ -538,19 +540,20 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 		}
 	}
 
-	// Match IP rules after TLS and HTTP check if DNS is not trusted
+	// Match IP rules in both modes after TLS and HTTP check if DNS is not trusted
 	if route == 1 && !ruleBased && !*dnsOK {
 		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
 			newRoute, ruleBased = matchIP(total, mode, tcpAddr.IP)
 			switch newRoute {
-			case -1:
-				stop2 <- true
-				try <- 0
-				return
+			case 0:
 			case 1:
 				stop2 <- true
 			case 2:
+				try <- 0
+				return
+			default:
+				stop2 <- true
 				try <- 0
 				return
 			}
@@ -780,6 +783,9 @@ func matchHost(total int, mode, host string) (route int, ruleBased bool) {
 func matchIP(total int, mode string, ip net.IP) (route int, ruleBased bool) {
 	if ipRules != nil {
 		route = findRouteForIP(ip, ipRules)
+		if route == 0 && elseRoute != 0 {
+			route = elseRoute
+		}
 		if route != 0 {
 			logger.Printf("%s %5d:  *            IP rule matched for %s. Select route %d", mode, total, ip, route)
 			ruleBased = true

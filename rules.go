@@ -32,6 +32,7 @@ var (
 	ipRules   []ipRule
 	hostRules []hostRule
 	httpRules []hostRule
+	elseRoute int
 )
 
 type byByte []ipRule
@@ -66,13 +67,19 @@ func parseIPList(file string) (rules []ipRule) {
 			continue
 		}
 		var ipstr string
+		if r[1] == "ELSE" {
+			elseRoute = route
+			continue
+		}
 		if !strings.Contains(r[1], "/") {
+			// Not CIDR
 			if strings.Contains(r[1], ":") {
 				ipstr = r[1] + "/128"
 			} else {
 				ipstr = r[1] + "/32"
 			}
 		} else {
+			// CIDR
 			ipstr = r[1]
 		}
 		// ParseCIDR returns 16-byte net.IP and 4 or 16-byte net.IPNet (both IP and Mask)

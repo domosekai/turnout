@@ -22,7 +22,7 @@ import (
 
 const maxLineLength = 4096 // assumed <= bufio.defaultBufSize
 
-var ErrLineTooLong = errors.New("header line too long")
+var errLineTooLong = errors.New("header line too long")
 
 // NewChunkedReader returns a new chunkedReader that translates the data read from r
 // out of HTTP "chunked" format before returning it.
@@ -96,12 +96,12 @@ func readChunkLine(b *bufio.Reader) (p []byte, p0 []byte, err error) {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		} else if err == bufio.ErrBufferFull {
-			err = ErrLineTooLong
+			err = errLineTooLong
 		}
 		return nil, nil, err
 	}
 	if len(p) >= maxLineLength {
-		return nil, nil, ErrLineTooLong
+		return nil, nil, errLineTooLong
 	}
 	p = trimTrailingWhitespace(p)
 	p, err = removeChunkExtension(p)
