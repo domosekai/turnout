@@ -102,7 +102,7 @@ func normalizeHostname(host, defaultPort string) (string, string) {
 	return h, defaultPort
 }
 
-func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
+func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
 	successive bool, total int, connection, tls bool, lastReq *time.Time) (*net.Conn, int) {
 	mu.Lock()
 	jobs[0]++
@@ -152,12 +152,12 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, full bool, firs
 	}
 	totalTimeout := 1
 	if route == 0 || route == 1 {
-		go handleRemote(bufIn, conn, &out1, first, full, ruleBased, firstReq, reqs, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start[0], try1, do1, stop2, connection, tls, lastReq)
+		go handleRemote(bufIn, conn, &out1, first, firstFull, ruleBased, firstReq, reqs, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start[0], try1, do1, stop2, connection, tls, lastReq)
 		totalTimeout += int(*r1Timeout)
 	}
 	if route == 0 || route == 2 {
 		for i, v := range socks {
-			go handleRemote(bufIn, conn, &out2[i], first, full, ruleBased, firstReq, reqs, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start[v.pri], try2, do2, stop2, connection, tls, lastReq)
+			go handleRemote(bufIn, conn, &out2[i], first, firstFull, ruleBased, firstReq, reqs, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start[v.pri], try2, do2, stop2, connection, tls, lastReq)
 			totalTimeout += int(*r2Timeout)
 		}
 	}
@@ -326,14 +326,14 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 	(*out).Close()
 }
 
-func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
+func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFull, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
 	timeout, total, route, server int, start chan bool, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
 	mu.Lock()
 	jobs[route]++
 	mu.Unlock()
 	select {
 	case <-start:
-		doRemote(bufIn, conn, out, firstOut, full, ruleBased, firstReq, reqs, mode, network, dest, host, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
+		doRemote(bufIn, conn, out, firstOut, firstFull, ruleBased, firstReq, reqs, mode, network, dest, host, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
 	case s := <-do:
 		do <- s
 	}
@@ -342,7 +342,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, ful
 	mu.Unlock()
 }
 
-func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
+func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFull, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
 	timeout, total, route, server int, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
 	var dp string
 	var err error
@@ -473,7 +473,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 	var firstResp *http.Response
 	bufOut := bufio.NewReader(*out)
 	n := 0
-	if full {
+	if firstFull {
 		(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 100))
 	} else {
 		(*out).SetReadDeadline(time.Now().Add(time.Second * time.Duration(timeout)))
@@ -488,7 +488,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 
 	if err != nil {
 		// If request is only partially sent, timeout is normal
-		if !full || !strings.Contains(err.Error(), "time") {
+		if !firstFull || !strings.Contains(err.Error(), "time") {
 			if strings.Contains(err.Error(), "reset") {
 				logger.Printf("%s %5d:     RST     %d First byte was reset", mode, total, route)
 			} else if strings.Contains(err.Error(), "time") {
@@ -502,6 +502,8 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 			return
 		}
 	} else {
+		// If there is response, remove full flag
+		firstFull = false
 		// Check response validity
 		if mode == "H" && firstReq != nil {
 			logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms", total, route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
@@ -583,10 +585,19 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 					firstResp = nil
 				} else {
 					var err error
-					if _, err = bufOut.ReadByte(); err == nil && len(reqs) > 0 {
-						bufOut.UnreadByte()
-						resp, err = http.ReadResponse(bufOut, <-reqs)
-					} else {
+					if _, err = bufOut.ReadByte(); err == nil {
+						if firstFull {
+							bufOut.UnreadByte()
+							resp, err = http.ReadResponse(bufOut, firstReq)
+							firstFull = false
+						} else if len(reqs) > 0 {
+							bufOut.UnreadByte()
+							resp, err = http.ReadResponse(bufOut, <-reqs)
+						} else {
+							err = errors.New("HTTP response with no matching request")
+						}
+					}
+					if err != nil {
 						totalTime := time.Since(sentTime)
 						if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "closed") {
 							logger.Printf("H %5d:          *  %d Remote connection closed. Received %d bytes in %.1f s", total, route, totalBytes, totalTime.Seconds())
@@ -607,9 +618,6 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, full, r
 								}
 							}
 						} else {
-							if err == nil {
-								err = errors.New("HTTP response with no matching request")
-							}
 							logger.Printf("H %5d:         ERR %d Remote connection closed. Received %d bytes in %.1f s. Error: %s", total, route, totalBytes, totalTime.Seconds(), err)
 						}
 						mu.Lock()
