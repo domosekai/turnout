@@ -90,12 +90,10 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t -slow 100 &
   
   # Set up redirect for all outgoing traffic (if ipset is not available or you have a powerful CPU)
-  iptables -t mangle -A PREROUTING -i br0 ! -d 192.168.0.0/16 -m state --state NEW -p tcp -j CONNMARK --set-mark 1
-  iptables -t nat -A PREROUTING -i br0 -m connmark --mark 1 -p tcp -j REDIRECT --to-ports 2222
+  iptables -t nat -A PREROUTING -i br0 ! -d 192.168.0.0/16 -p tcp -j REDIRECT --to-ports 2222
   
   # Set up redirect for international traffic only (you must have ipset installed and a list called domestic which contains all domestic CIDRs)
-  iptables -t mangle -A PREROUTING -i br0 ! -d 192.168.0.0/16 -m state --state NEW -p tcp -m set ! --match-set domestic dst -j CONNMARK --set-mark 1
-  iptables -t nat -A PREROUTING -i br0 -m connmark --mark 1 -p tcp -j REDIRECT --to-ports 2222
+  iptables -t nat -A PREROUTING -i br0 ! -d 192.168.0.0/16 -p tcp -m set ! --match-set domestic dst -j REDIRECT --to-ports 2222
   
   # Alternatively, set up TPROXY for all outgoing traffic
   iptables -t mangle -A PREROUTING -i br0 ! -d 192.168.0.0/16 -m state --state NEW -p tcp -j CONNMARK --set-mark 1
