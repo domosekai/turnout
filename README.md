@@ -78,7 +78,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
 - Transparent proxy (Linux only)
 
-  Both TPROXY (use -t option) and REDIRECT modes are supported. You need to redirect the traffic to Turnout using iptables. 
+  Both TPROXY (use `-t` option) and REDIRECT modes are supported. You need to redirect the traffic to Turnout using iptables. 
   
   REDIRECT mode is an old feature available on nearly all devices and also easy to configure. It supports IPv6 since kernel 3.7.
   TPROXY mode is a bit faster than REDIRECT but TPROXY kernel module may be missing on some old systems. On standard kernels, TPROXY is available since 2.6.28 and supports IPv6 since 2.6.37.
@@ -87,17 +87,24 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
   ```shell
   # Start Turnout in the background
-  turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t -slow 100 &
+  turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t -slow 100 -quiet &
   
-  # Set up redirect for all outgoing traffic (if ipset is not available or you have a powerful CPU)
+  # Case 1: Set up REDIRECT for all outgoing traffic (CPU-intensive)
   iptables -t nat -A PREROUTING -i br0 ! -d 192.168.0.0/16 -p tcp -j REDIRECT --to-ports 2222
   
-  # Set up redirect for international traffic only (you must have ipset installed and a list called domestic which contains all domestic CIDRs)
+  # Case 2: Set up REDIRECT for international traffic only (recommended if TPROXY is not available, ipset support and a domestic CIDR list are needed)
   iptables -t nat -A PREROUTING -i br0 ! -d 192.168.0.0/16 -p tcp -m set ! --match-set domestic dst -j REDIRECT --to-ports 2222
   
-  # Alternatively, set up TPROXY for all outgoing traffic
-  iptables -t mangle -A PREROUTING -i br0 ! -d 192.168.0.0/16 -m state --state NEW -p tcp -j CONNMARK --set-mark 1
+  # Case 3: Set up TPROXY for international traffic only (recommended, ipset support and a domestic CIDR list are needed)
+  iptables -t mangle -N DIVERT
+  iptables -t mangle -A DIVERT -j MARK --set-mark 1
+  iptables -t mangle -A DIVERT -j ACCEPT
+  ## This line matches established connections
+  iptables -t mangle -A PREROUTING -m socket --transparent -j DIVERT
+  ## These lines match new and related connections
+  iptables -t mangle -A PREROUTING -i br0 ! -d 192.168.0.0/16 -m state --state NEW -p tcp -m set ! --match-set domestic dst -j CONNMARK --set-mark 1
   iptables -t mangle -A PREROUTING -i br0 -m connmark --mark 1 -p tcp -j TPROXY --on-port 2222 --tproxy-mark 1
+  ## Rule for redirecting to local
   ip rule add fwmark 1 table 100
   ip route add local 0.0.0.0/0 dev lo table 100
   ```
@@ -112,7 +119,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
 - HTTP proxy
 
-  This command starts an HTTP proxy at localhost's port 8080 and sets 127.0.0.1:1080 as upstream SOCKS5 proxy. Connections with download speed less than 100 kB/s will be added to slow list and routed via route 2 from the next connection.
+  This command starts an HTTP proxy at local port 8080 and sets 127.0.0.1:1080 as upstream SOCKS5 proxy. Connections with download speed less than 100 kB/s will be added to slow list and routed via route 2 from the next connection.
   
   ```shell
   turnout -h 127.0.0.1:8080 -s 127.0.0.1:1080 -slow 100
@@ -144,13 +151,13 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
     Turnout is written with the assumption that DNS results can be bogus. Generally speaking, if a bogus result leads to nowhere, Turnout can detect it and use route 2 automatically. However, there are some circumstances that Turnout might need your help, such as in a plain text HTTP hijack. In case that Turnout is unable to tell there's a hijack, you might need to add a rule for that IP. 
     
-    If you have set up a reliable nameserver as system resolver, you are very welcome to use it but you also need to make sure it is optimized for CDNs in the main route. Please use -dnsok option to assert the results are genuine so that Turnout can skip some unnecessary checks.
+    If you have set up a reliable nameserver as system resolver, you are very welcome to use it but you also need to make sure it is optimized for CDNs in the main route. Please use `-dnsok` option to assert the results are genuine so that Turnout can skip some unnecessary checks.
     
-  - Encrypted SNI (ESNI)
+  - Hostname sniffing
   
     In transparent proxy mode, for any traffic sent over route 2, Turnout tries to sniff hostnames from the first packet and send them instead of IPs to SOCKS proxies to allow name resolution on the remote side, so that the speed is not affected by the local DNS result.
     
-    HTTP and TLS are supported but TLS with ESNI is not because of the encrypted hostname. That is to say, with ESNI the transmission speed may not be as fast as it should be. Cloudflare supports ESNI since 2018 but among major browsers only Firefox Nightly currently supports it.
+    HTTP and TLS connections are supported but TLS with ESNI is not because of the encrypted hostname. That is to say, with ESNI the transmission speed may not be as fast as it should be. Cloudflare supports ESNI since 2018 but among major browsers only Firefox Nightly currently supports it.
     
   - Unreliable ISP
   
