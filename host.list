@@ -10,7 +10,8 @@
 // Destinations with specific routes are exempt from speed check.
 
 // Format (Remove the leading // to take effect)
-//1 sample.com   Exact match (via route 1)
-//1 *.baidu.com  Wildcard match
-//2 *github*     No more than 2 asterisks are allowed
-//-1 *pornhub*   Destinations with route -1 will be blocked
+//1 baidu.com        Domain match (match *.baidu.com and baidu.com to route 1)
+//1 "www.baidu.com"  Exact match
+//1 *.baidu.com      Wildcard match (match www.baidu.com but not baidu.com)
+//2 *github*         Match any text containing github to route 2 (2 asterisks at most)
+//-1 *pornhub*       Destinations with route -1 will be blocked

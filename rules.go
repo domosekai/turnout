@@ -24,6 +24,7 @@ type hostRule struct {
 	left   string
 	middle string
 	right  string
+	domain string
 	any    bool
 	route  int
 }
@@ -117,6 +118,13 @@ func parseHostList(file string) (rules []hostRule) {
 			rules = append(rules, hostRule{any: true, route: route})
 			continue
 		}
+		if strings.HasPrefix(r[1], "\"") && strings.HasSuffix(r[1], "\"") {
+			d := strings.TrimSuffix(strings.TrimPrefix(r[1], "\""), "\"")
+			if d != "" {
+				rules = append(rules, hostRule{exact: strings.ToLower(d), route: route})
+			}
+			continue
+		}
 		if strings.Contains(r[1], "**") {
 			continue
 		}
@@ -132,7 +140,8 @@ func parseHostList(file string) (rules []hostRule) {
 			} else if !b1 && b2 {
 				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), route: route})
 			} else {
-				rules = append(rules, hostRule{exact: strings.ToLower(parts[0]), route: route})
+				// Treat as dnsmasq-style domain if no wildcard
+				rules = append(rules, hostRule{domain: strings.ToLower(parts[0]), route: route})
 			}
 		case 2:
 			if b1 && !b2 {
@@ -250,6 +259,12 @@ func findRouteForText(text string, rules []hostRule, ignoreCase bool) int {
 		}
 		if v.exact != "" {
 			if v.exact == text {
+				return v.route
+			}
+			continue
+		}
+		if v.domain != "" {
+			if text == v.domain || strings.HasSuffix(text, "."+v.domain) {
 				return v.route
 			}
 			continue
