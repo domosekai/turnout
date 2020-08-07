@@ -292,7 +292,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool,
 func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n int, lastReq *time.Time) {
 	totalBytes := int64(n)
 	var err error
-	if *slowSpeed > 0 {
+	if route == 1 && *slowSpeed > 0 {
 		for {
 			p := make([]byte, bufferSize)
 			var bytes int
@@ -702,7 +702,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 						accumStart = *lastReq
 						accum = 0
 					}
-					bytes, err := receiveSend(conn, resp.Body, ruleBased, true, mode, dest, host, (*out).RemoteAddr(), total, route, lastReq, accum)
+					bytes, err := receiveSend(conn, resp.Body, ruleBased, true, mode, dest, host, port, (*out).RemoteAddr(), total, route, lastReq, accum)
 					accum += bytes
 					totalBytes += bytes
 					resp.Body.Close()
@@ -734,7 +734,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 			}
 		} else {
 			(*conn).Write(firstIn[:n])
-			bytes, err := receiveSend(conn, bufOut, ruleBased, false, mode, dest, host, (*out).RemoteAddr(), total, route, lastReq, int64(n))
+			bytes, err := receiveSend(conn, bufOut, ruleBased, false, mode, dest, host, port, (*out).RemoteAddr(), total, route, lastReq, int64(n))
 			totalBytes := int64(n) + bytes + int64(bufOut.Buffered())
 			totalTime := time.Since(sentTime)
 			if err == nil || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "time") {
@@ -813,8 +813,8 @@ func matchIP(total int, mode string, ip net.IP) (route int, ruleBased bool) {
 	return
 }
 
-func receiveSend(conn *net.Conn, out io.Reader, ruleBased, single bool, mode, dest, host string, addr net.Addr, total, route int, lastReq *time.Time, lastBytes int64) (bytes int64, err error) {
-	if route == 1 && *slowSpeed > 0 && !ruleBased {
+func receiveSend(conn *net.Conn, out io.Reader, ruleBased, single bool, mode, dest, host, port string, addr net.Addr, total, route int, lastReq *time.Time, lastBytes int64) (bytes int64, err error) {
+	if route == 1 && *slowSpeed > 0 && !ruleBased && (port == "80" || port == "443") {
 		var sample int64
 		accum := lastBytes
 		sampleStart := time.Now()
