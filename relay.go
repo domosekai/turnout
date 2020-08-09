@@ -579,7 +579,9 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 				<-reqs
 			}
 		}()
-		*lastReq = time.Now()
+		// Set last request time to sent time before writeing response to client
+		// Do not set initially at client side as it's racy
+		*lastReq = sentTime
 		logger.Printf("%s %5d:      *      %d Continue %s %s -> %s", mode, total, route, (*out).LocalAddr().Network(), (*out).LocalAddr(), (*out).RemoteAddr())
 		if mode == "H" && firstReq != nil {
 			var totalBytes, accum int64
@@ -764,7 +766,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 			} else {
 				logger.Printf("%s %5d:         ERR %d Remote connection closed. Received %d bytes in %.1f s. Error: %s", mode, total, route, totalBytes, totalTime.Seconds(), err)
 			}
-			if route == 1 && !ruleBased && tls && totalBytes == int64(n) && totalTime.Seconds() > 5 {
+			if route == 1 && !ruleBased && tls && totalBytes == int64(n) && totalTime.Seconds() > 5 && !(*lastReq).Equal(sentTime) {
 				if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 					logger.Printf("%s %5d:         ADD %d TLS handshake was cut off after first byte. %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
 					blockedIPSet.add(tcpAddr.IP)

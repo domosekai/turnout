@@ -7,11 +7,11 @@
 // Therefore the routing decision Turnout makes is based solely on the result from the system resolver.
 // If the system resolver may provide bogus result, you need to take that into consideration when writing rules.
 
-// Rule destinations should not be overlapping each other.
+// IP/CIDRs below SHOULD NOT be overlapping each other.
 // Destinations with specific routes are exempt from speed check.
 
 // Format (Remove the leading // to take effect)
 //1 192.168.0.0/16   Select route 1
 //2 8.8.8.8          Select route 2
-//-1 31.13.0.0/16    Destinations with route -1 will be blocked
+//-1 127.0.0.0/8     Destinations with route -1 will be blocked
 //2 ELSE             Special rule matching any unmatched destinations

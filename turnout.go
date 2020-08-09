@@ -143,6 +143,9 @@ func main() {
 			logger.Printf("Loaded %d IP rules", len(ipRules))
 			sort.Sort(byByte(ipRules))
 		}
+		if elseRoute != 0 {
+			logger.Printf("Unmatched IPs will use route %d", elseRoute)
+		}
 	}
 	if *hostFile != "" {
 		hostRules = parseHostList(*hostFile)

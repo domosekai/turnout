@@ -153,6 +153,8 @@ func handleHTTP(conn net.Conn, total int) {
 						rejectHTTP(&conn)
 						continue
 					}
+				} else {
+					lastReq = time.Now()
 				}
 			}
 			if req.ContentLength == -1 && len(req.TransferEncoding) > 0 && req.TransferEncoding[0] == "chunked" {
@@ -177,6 +179,7 @@ func handleHTTP(conn net.Conn, total int) {
 						break
 					}
 				}
+				lastReq = time.Now()
 			} else if req.ContentLength != 0 {
 				bytes, err := io.Copy(*out, req.Body)
 				totalBytes += bytes
@@ -186,8 +189,8 @@ func handleHTTP(conn net.Conn, total int) {
 					bufIn.Discard(bufIn.Buffered())
 					continue
 				}
+				lastReq = time.Now()
 			}
-			lastReq = time.Now()
 		}
 	}
 	if out != nil {
