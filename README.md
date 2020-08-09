@@ -62,7 +62,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
   ✔ Work as both an HTTP proxy (all platforms) and a transparent proxy (Linux only)
   
-  ✔ Slow connection detection
+  ✔ Slow connection detection (Port 80 and 443 only)
   
   ✔ Sniff hostnames for better speed over route 2 (transparent proxy mode)
   
@@ -89,13 +89,13 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   # Start Turnout in the background
   turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t -slow 100 -quiet &
   
-  # Case 1: Set up REDIRECT for all outgoing traffic (CPU-intensive)
+  # Option 1: Set up REDIRECT for all outgoing traffic (CPU-intensive)
   iptables -t nat -A PREROUTING -i br0 ! -d 192.168.0.0/16 -p tcp -j REDIRECT --to-ports 2222
   
-  # Case 2: Set up REDIRECT for international traffic only (recommended if TPROXY is not available, ipset support and a domestic CIDR list are needed)
+  # Option 2: Set up REDIRECT for international traffic only (recommended if TPROXY is not available, ipset support and a domestic CIDR list are needed)
   iptables -t nat -A PREROUTING -i br0 ! -d 192.168.0.0/16 -p tcp -m set ! --match-set domestic dst -j REDIRECT --to-ports 2222
   
-  # Case 3: Set up TPROXY for international traffic only (recommended, ipset support and a domestic CIDR list are needed)
+  # Option 3: Set up TPROXY for international traffic only (recommended, ipset support and a domestic CIDR list are needed)
   iptables -t mangle -N DIVERT
   iptables -t mangle -A DIVERT -j MARK --set-mark 1
   iptables -t mangle -A DIVERT -j ACCEPT
@@ -157,7 +157,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
     In transparent proxy mode, for any traffic sent over route 2, Turnout tries to sniff hostnames from the first packet and send them instead of IPs to SOCKS proxies to allow name resolution on the remote side, so that the speed is not affected by the local DNS result.
     
-    HTTP and TLS connections are supported but TLS with ESNI is not because of the encrypted hostname. That is to say, with ESNI the transmission speed may not be as fast as it should be. Cloudflare supports ESNI since 2018 but among major browsers only Firefox Nightly currently supports it.
+    HTTP and TLS connections are supported but TLS with ESNI is not because the hostname is encrypted. Cloudflare supports ESNI since 2018 but among major browsers only Firefox supports it (disabled by default). You are recommended to not use ESNI with Turnout.
     
   - Unreliable ISP
   
