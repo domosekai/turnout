@@ -54,10 +54,16 @@ func handleFirstByte(bufIn *bufio.Reader, conn *net.Conn, mode, network, dest, p
 	// TLS Client Hello
 	if n > recordHeaderLen && recordType(first[0]) == recordTypeHandshake && first[recordHeaderLen] == typeClientHello {
 		if m := new(clientHelloMsg); m.unmarshal(first[recordHeaderLen:n]) {
-			logger.Printf("%s %5d:  *            TLS SNI %s", mode, total, m.serverName)
 			host := ""
-			if sniff {
-				host, _ = normalizeHostname(m.serverName, port)
+			if m.serverName != "" {
+				logger.Printf("%s %5d:  *            TLS SNI %s", mode, total, m.serverName)
+				if sniff {
+					host, _ = normalizeHostname(m.serverName, port)
+				}
+			} else if m.esni {
+				logger.Printf("%s %5d:  *            TLS ESNI", mode, total)
+			} else {
+				logger.Printf("%s %5d:  *            TLS Client Hello", mode, total)
 			}
 			if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, nil, nil, mode, network, dest, host, port, false, total, false, true, &lastReq); out != nil {
 				relayLocal(bufIn, out, mode, total, route, n, &lastReq)

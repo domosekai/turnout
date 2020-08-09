@@ -88,6 +88,7 @@ const (
 	extensionSignatureAlgorithmsCert uint16 = 50
 	extensionKeyShare                uint16 = 51
 	extensionRenegotiationInfo       uint16 = 0xff01
+	extensionEncryptedServerName     uint16 = 0xffce
 )
 
 // TLS signaling cipher suite values
@@ -140,6 +141,7 @@ type clientHelloMsg struct {
 	serverName                   string
 	secureRenegotiationSupported bool
 	supportedVersions            []uint16
+	esni                         bool
 }
 
 func (m *clientHelloMsg) unmarshal(data []byte) bool {
@@ -232,6 +234,9 @@ func (m *clientHelloMsg) unmarshal(data []byte) bool {
 				}
 				m.supportedVersions = append(m.supportedVersions, vers)
 			}
+		case extensionEncryptedServerName:
+			m.esni = true
+			extData = nil
 		default:
 			// Ignore unknown extensions.
 			continue
