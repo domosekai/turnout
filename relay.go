@@ -333,15 +333,15 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 	}
 	if err == nil || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "time") {
 		if *verbose {
-			logger.Printf("%s %5d:          *    Local connection closed. Sent %d bytes", mode, total, totalBytes)
+			logger.Printf("%s %5d:          *    Local connection closed, %d bytes sent", mode, total, totalBytes)
 		}
 	} else if strings.Contains(err.Error(), "reset") {
 		if *verbose {
-			logger.Printf("%s %5d:          *    Local connection reset. Sent %d bytes", mode, total, totalBytes)
+			logger.Printf("%s %5d:          *    Local connection reset, %d bytes sent", mode, total, totalBytes)
 		}
 	} else {
 		if *verbose {
-			logger.Printf("%s %5d:         ERR   Local connection closed. Sent %d bytes. Error: %s", mode, total, totalBytes, err)
+			logger.Printf("%s %5d:         ERR   Local connection closed, %d bytes sent. Error: %s", mode, total, totalBytes, err)
 		}
 	}
 	mu.Lock()
@@ -663,28 +663,30 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 						totalTime := time.Since(sentTime)
 						if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "closed") {
 							if *verbose {
-								logger.Printf("H %5d:          *  %d Remote connection closed. Received %d bytes in %.1f s", total, route, totalBytes, totalTime.Seconds())
+								logger.Printf("H %5d:          *  %d Remote connection closed, %d bytes received in %.1f s", total, route, totalBytes, totalTime.Seconds())
 							}
-							if route == 1 && !ruleBased && totalTime.Seconds() > 30 && totalBytes < 1000 {
-								logger.Printf("H %5d:         ERR %d Suspiciously blocked connection to %s %s, %.1f s since last request", total, route, host, (*out).RemoteAddr(), time.Since(*lastReq).Seconds())
-								/*if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:         BLK %d %s added to blocked list", total, route, tcpAddr.IP)
-									blocked.add(tcpAddr.IP)
-								}*/
+							t := time.Since(*lastReq).Seconds()
+							if route == 1 && !ruleBased && t > 30 && totalBytes < 1000 {
+								//logger.Printf("H %5d:         ERR %d Suspiciously blocked connection to %s %s, %.1f s since last request", total, route, host, (*out).RemoteAddr(), time.Since(*lastReq).Seconds())
+								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+									logger.Printf("H %5d:         BLK %d Traffic likely cut off, %.1f s since last request, %s %s added to blocked list", total, route, t, host, tcpAddr.IP)
+									blockedIPSet.add(tcpAddr.IP)
+									blockedHostSet.add(host)
+								}
 							}
 						} else if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
 							if *verbose {
-								logger.Printf("H %5d:         RST %d Remote connection reset. Received %d bytes in %.1f s, %.1f s since last request. Error: %s", total, route, totalBytes, totalTime.Seconds(), time.Since(*lastReq).Seconds(), err)
+								logger.Printf("H %5d:         RST %d Remote connection reset, %d bytes received in %.1f s, %.1f s since last request. Error: %s", total, route, totalBytes, totalTime.Seconds(), time.Since(*lastReq).Seconds(), err)
 							}
 							if route == 1 && !ruleBased && totalTime.Seconds() < blockSafeTime {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:         BLK %d TCP reset detected. %s %s added to blocked list", total, route, host, tcpAddr.IP)
+									logger.Printf("H %5d:         BLK %d TCP reset detected, %s %s added to blocked list", total, route, host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
 									blockedHostSet.add(host)
 								}
 							}
 						} else {
-							logger.Printf("H %5d:         ERR %d Remote connection closed. Received %d bytes in %.1f s. Error: %s", total, route, totalBytes, totalTime.Seconds(), err)
+							logger.Printf("H %5d:         ERR %d Remote connection closed, %d bytes received in %.1f s. Error: %s", total, route, totalBytes, totalTime.Seconds(), err)
 						}
 						mu.Lock()
 						received[route] += totalBytes
@@ -746,7 +748,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 							}
 							if route == 1 && !ruleBased && time.Since(*lastReq).Seconds() < blockSafeTime {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:     BLK     %d TCP reset detected. %s %s added to blocked list", total, route, host, tcpAddr.IP)
+									logger.Printf("H %5d:     BLK     %d TCP reset detected, %s %s added to blocked list", total, route, host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
 									blockedHostSet.add(host)
 								}
@@ -791,7 +793,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 							}
 							if route == 1 && !ruleBased && time.Since(*lastReq).Seconds() < blockSafeTime {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:     BLK     %d TCP reset detected. %s %s added to blocked list", total, route, host, tcpAddr.IP)
+									logger.Printf("H %5d:     BLK     %d TCP reset detected, %s %s added to blocked list", total, route, host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
 									blockedHostSet.add(host)
 								}
@@ -819,34 +821,36 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 			totalTime := time.Since(sentTime)
 			if err == nil || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "time") {
 				if *verbose {
-					logger.Printf("%s %5d:          *  %d Remote connection closed. Received %d bytes in %.1f s", mode, total, route, totalBytes, totalTime.Seconds())
+					logger.Printf("%s %5d:          *  %d Remote connection closed, %d bytes received in %.1f s", mode, total, route, totalBytes, totalTime.Seconds())
 				}
-				if route == 1 && !ruleBased && totalTime.Seconds() > 30 && totalBytes < 1000 {
-					logger.Printf("%s %5d:         ERR %d Suspiciously blocked connection to %s %s, %.1f s since last request", mode, total, route, host, (*out).RemoteAddr(), time.Since(*lastReq).Seconds())
-					/*if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-						logger.Printf("%s %5d:         BLK %d %s added to blocked list", mode, total, route, tcpAddr.IP)
-						blocked.add(tcpAddr.IP)
-					}*/
+				t := time.Since(*lastReq).Seconds()
+				if route == 1 && !ruleBased && t > 15 && totalBytes < 1000 {
+					//logger.Printf("%s %5d:         ERR %d Suspiciously blocked connection to %s %s, %.1f s since last request", mode, total, route, host, (*out).RemoteAddr(), time.Since(*lastReq).Seconds())
+					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+						logger.Printf("%s %5d:         BLK %d Traffic likely cut off, %.1f s since last request, %s %s added to blocked list", mode, total, route, t, host, tcpAddr.IP)
+						blockedIPSet.add(tcpAddr.IP)
+						blockedHostSet.add(host)
+					}
 				}
 			} else if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
 				if *verbose {
-					logger.Printf("%s %5d:         RST %d Remote connection reset. Received %d bytes in %.1f s, %.1f s since last request. Error: %s", mode, total, route, totalBytes, totalTime.Seconds(), time.Since(*lastReq).Seconds(), err)
+					logger.Printf("%s %5d:         RST %d Remote connection reset, %d bytes received in %.1f s, %.1f s since last request. Error: %s", mode, total, route, totalBytes, totalTime.Seconds(), time.Since(*lastReq).Seconds(), err)
 				}
 				if route == 1 && !ruleBased && totalTime.Seconds() < blockSafeTime {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-						logger.Printf("%s %5d:         BLK %d TCP reset detected. %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
+						logger.Printf("%s %5d:         BLK %d TCP reset detected, %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
 						blockedIPSet.add(tcpAddr.IP)
 						blockedHostSet.add(host)
 					}
 				}
 			} else {
 				if *verbose {
-					logger.Printf("%s %5d:         ERR %d Remote connection closed. Received %d bytes in %.1f s. Error: %s", mode, total, route, totalBytes, totalTime.Seconds(), err)
+					logger.Printf("%s %5d:         ERR %d Remote connection closed, %d bytes received in %.1f s. Error: %s", mode, total, route, totalBytes, totalTime.Seconds(), err)
 				}
 			}
 			if route == 1 && !ruleBased && tls && totalBytes == int64(n) && totalTime.Seconds() > 5 && !(*lastReq).Equal(sentTime) {
 				if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-					logger.Printf("%s %5d:         BLK %d TLS handshake cut off. %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
+					logger.Printf("%s %5d:         BLK %d TLS handshake cut off, %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
 					blockedIPSet.add(tcpAddr.IP)
 					blockedHostSet.add(host)
 				}

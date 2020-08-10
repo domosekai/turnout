@@ -70,17 +70,17 @@ func handleHTTP(conn net.Conn, total int) {
 		if err != nil {
 			if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") {
 				if *verbose {
-					logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes", total, totalBytes)
+					logger.Printf("H %5d:          *    Local connection closed, %d bytes sent", total, totalBytes)
 				}
 			} else if strings.Contains(err.Error(), "reset") {
 				if *verbose {
-					logger.Printf("H %5d:          *    Local connection reset. Sent %d bytes", total, totalBytes)
+					logger.Printf("H %5d:          *    Local connection reset, %d bytes sent", total, totalBytes)
 				}
 			} else if strings.Contains(err.Error(), "malformed") {
-				logger.Printf("H %5d:         ERR   Local connection closed due to bad HTTP request. Sent %d bytes. Error: %s", total, totalBytes, err)
+				logger.Printf("H %5d:         ERR   Local connection closed due to bad HTTP request, %d bytes sent. Error: %s", total, totalBytes, err)
 			} else {
 				if *verbose {
-					logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes. Error: %s", total, totalBytes, err)
+					logger.Printf("H %5d:          *    Local connection closed, %d bytes sent. Error: %s", total, totalBytes, err)
 				}
 			}
 			mu.Lock()
