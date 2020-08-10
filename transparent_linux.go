@@ -99,7 +99,9 @@ func handleLocal(conn net.Conn, total int) {
 			return
 		}
 	}
-	logger.Printf("T %5d:  *            New %s %s -> %s", total, network, conn.RemoteAddr(), dest)
+	if *verbose {
+		logger.Printf("T %5d:  *            New %s %s -> %s", total, network, conn.RemoteAddr(), dest)
+	}
 	host, port, _ := net.SplitHostPort(dest)
 	handleFirstByte(bufio.NewReader(conn), &conn, "T", network, host, port, true, total)
 }

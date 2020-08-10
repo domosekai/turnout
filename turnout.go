@@ -8,7 +8,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -42,7 +41,7 @@ var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in th
 var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1. This may break connections.")
 var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked list")
 var dnsOK = flag.Bool("dnsok", false, "Trust system DNS resolver (allowing fast IP rule matching)")
-var quiet = flag.Bool("quiet", false, "Suppress output")
+var verbose = flag.Bool("verbose", false, "Verbose logging")
 var httpBadStatus = flag.String("badhttp", "", "Drop specified (non-TLS) HTTP response from route 1 (e.g. 403,404,5*)")
 var version = "unknown"
 var builddate = "unknown"
@@ -85,8 +84,6 @@ func main() {
 		}
 		defer f.Close()
 		logger = log.New(f, "", log.Ldate|log.Ltime|log.Lmicroseconds)
-	} else if *quiet {
-		logger = log.New(ioutil.Discard, "", log.Ldate|log.Ltime|log.Lmicroseconds)
 	} else {
 		logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lmicroseconds)
 	}

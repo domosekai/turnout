@@ -58,7 +58,9 @@ func handleHTTP(conn net.Conn, total int) {
 	var totalBytes int64
 	var out *net.Conn
 	var route int
-	logger.Printf("H %5d:  *            New %s %s -> %s", total, conn.LocalAddr().Network(), conn.RemoteAddr(), conn.LocalAddr())
+	if *verbose {
+		logger.Printf("H %5d:  *            New %s %s -> %s", total, conn.LocalAddr().Network(), conn.RemoteAddr(), conn.LocalAddr())
+	}
 	bufIn := bufio.NewReader(conn)
 	var lastReq time.Time
 	var ch chan *http.Request
@@ -67,23 +69,31 @@ func handleHTTP(conn net.Conn, total int) {
 		req, err := http.ReadRequest(bufIn)
 		if err != nil {
 			if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") {
-				logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes", total, totalBytes)
+				if *verbose {
+					logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes", total, totalBytes)
+				}
 			} else if strings.Contains(err.Error(), "reset") {
-				logger.Printf("H %5d:          *    Local connection reset. Sent %d bytes", total, totalBytes)
+				if *verbose {
+					logger.Printf("H %5d:          *    Local connection reset. Sent %d bytes", total, totalBytes)
+				}
 			} else if strings.Contains(err.Error(), "malformed") {
 				logger.Printf("H %5d:         ERR   Local connection closed due to bad HTTP request. Sent %d bytes. Error: %s", total, totalBytes, err)
 			} else {
-				logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes. Error: %s", total, totalBytes, err)
+				if *verbose {
+					logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes. Error: %s", total, totalBytes, err)
+				}
 			}
 			mu.Lock()
 			sent[route] += totalBytes
 			mu.Unlock()
 			break
 		}
-		logger.Printf("H %5d:  *            HTTP %s Host %s Content-length %d", total, req.Method, req.Host, req.ContentLength)
+		if *verbose {
+			logger.Printf("H %5d:  *            HTTP %s Host %s Content-length %d", total, req.Method, req.Host, req.ContentLength)
+		}
 		host, port := normalizeHostname(req.Host, "80")
 		if host == "" {
-			logger.Printf("H %5d: ERR           Invalid hostname: %s", total, req.Host)
+			logger.Printf("H %5d: ERR           Invalid HTTP hostname: %s", total, req.Host)
 			rejectHTTP(&conn)
 			break
 		}
@@ -162,7 +172,9 @@ func handleHTTP(conn net.Conn, total int) {
 				n, bytes, err := cr.copy(out)
 				totalBytes += bytes
 				if errors.Is(err, io.EOF) {
-					logger.Printf("H %5d:  *            Parsed %d chunks and %d bytes", total, n, bytes)
+					if *verbose {
+						logger.Printf("H %5d:  *            Parsed %d chunks and %d bytes", total, n, bytes)
+					}
 				} else {
 					logger.Printf("H %5d: ERR           Parsed %d chunks and %d bytes but failed to sent to server. Error: %s", total, n, bytes, err)
 					bufIn.Discard(bufIn.Buffered())
