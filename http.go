@@ -77,7 +77,9 @@ func handleHTTP(conn net.Conn, total int) {
 					logger.Printf("H %5d:          *    Local connection reset, %d bytes sent", total, totalBytes)
 				}
 			} else if strings.Contains(err.Error(), "malformed") {
-				logger.Printf("H %5d:         ERR   Local connection closed due to bad HTTP request, %d bytes sent. Error: %s", total, totalBytes, err)
+				if *verbose {
+					logger.Printf("H %5d:         ERR   Local connection closed due to bad HTTP request, %d bytes sent. Error: %s", total, totalBytes, err)
+				}
 			} else {
 				if *verbose {
 					logger.Printf("H %5d:          *    Local connection closed, %d bytes sent. Error: %s", total, totalBytes, err)
@@ -158,7 +160,9 @@ func handleHTTP(conn net.Conn, total int) {
 				if out == nil || err != nil {
 					ch = make(chan *http.Request, httpPipeline)
 					if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, ch, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out == nil {
-						logger.Printf("H %5d: ERR           Failed to send HTTP header to server. Error: %s", total, err)
+						if *verbose {
+							logger.Printf("H %5d: ERR           Failed to send HTTP header to server. Error: %s", total, err)
+						}
 						bufIn.Discard(bufIn.Buffered())
 						rejectHTTP(&conn)
 						continue
@@ -176,7 +180,9 @@ func handleHTTP(conn net.Conn, total int) {
 						logger.Printf("H %5d:  *            Parsed %d chunks and %d bytes", total, n, bytes)
 					}
 				} else {
-					logger.Printf("H %5d: ERR           Parsed %d chunks and %d bytes but failed to sent to server. Error: %s", total, n, bytes, err)
+					if *verbose {
+						logger.Printf("H %5d: ERR           Parsed %d chunks and %d bytes but failed to sent to server. Error: %s", total, n, bytes, err)
+					}
 					bufIn.Discard(bufIn.Buffered())
 					continue
 				}
@@ -197,7 +203,9 @@ func handleHTTP(conn net.Conn, total int) {
 				totalBytes += bytes
 				req.Body.Close()
 				if err != nil {
-					logger.Printf("H %5d: ERR           Failed to send HTTP body to server. Error: %s", total, err)
+					if *verbose {
+						logger.Printf("H %5d: ERR           Failed to send HTTP body to server. Error: %s", total, err)
+					}
 					bufIn.Discard(bufIn.Buffered())
 					continue
 				}

@@ -582,7 +582,9 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 						return
 					}
 				} else {
-					logger.Printf("%s %5d:     ERR     %d Bad HTTP response. Error: %s", mode, total, route, err)
+					if *verbose {
+						logger.Printf("%s %5d:     ERR     %d Bad HTTP response. Error: %s", mode, total, route, err)
+					}
 					if route == 1 && !ruleBased {
 						try <- 0
 						return
@@ -591,7 +593,9 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 			}
 			if tls && n > recordHeaderLen {
 				if !(recordType(firstIn[0]) == recordTypeHandshake && firstIn[recordHeaderLen] == typeServerHello) {
-					logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake", mode, total, route)
+					if *verbose {
+						logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake", mode, total, route)
+					}
 					if route == 1 && !ruleBased {
 						try <- 0
 						return
@@ -668,11 +672,11 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 							}
 							t := time.Since(*lastReq).Seconds()
 							if route == 1 && !ruleBased && t > 30 && totalBytes < 1000 {
-								//logger.Printf("H %5d:         ERR %d Suspiciously blocked connection to %s %s, %.1f s since last request", total, route, host, (*out).RemoteAddr(), time.Since(*lastReq).Seconds())
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:         BLK %d Traffic likely cut off, %.1f s since last request, %s %s added to blocked list", total, route, t, host, tcpAddr.IP)
+									logger.Printf("H %5d:         ERR %d Connection to %s %s likely cut off, %.1f s since last request", total, route, host, tcpAddr, t)
+									/*logger.Printf("H %5d:         ADD %d Connection likely cut off, %.1f s since last request, %s %s added to blocked list", total, route, t, host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
-									blockedHostSet.add(host)
+									blockedHostSet.add(host)*/
 								}
 							}
 						} else if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
@@ -681,7 +685,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 							}
 							if route == 1 && !ruleBased && totalTime.Seconds() < blockSafeTime {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:         BLK %d TCP reset detected, %s %s added to blocked list", total, route, host, tcpAddr.IP)
+									logger.Printf("H %5d:         ADD %d TCP reset detected, %s %s added to blocked list", total, route, host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
 									blockedHostSet.add(host)
 								}
@@ -749,7 +753,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 							}
 							if route == 1 && !ruleBased && time.Since(*lastReq).Seconds() < blockSafeTime {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:     BLK     %d TCP reset detected, %s %s added to blocked list", total, route, host, tcpAddr.IP)
+									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s %s added to blocked list", total, route, host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
 									blockedHostSet.add(host)
 								}
@@ -794,7 +798,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 							}
 							if route == 1 && !ruleBased && time.Since(*lastReq).Seconds() < blockSafeTime {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:     BLK     %d TCP reset detected, %s %s added to blocked list", total, route, host, tcpAddr.IP)
+									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s %s added to blocked list", total, route, host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
 									blockedHostSet.add(host)
 								}
@@ -827,16 +831,20 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 				t := time.Since(*lastReq).Seconds()
 				if route == 1 && !ruleBased && tls && totalBytes == int64(n) && totalTime.Seconds() > 5 && !(*lastReq).Equal(sentTime) {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-						logger.Printf("%s %5d:         BLK %d TLS handshake cut off, %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
-						blockedIPSet.add(tcpAddr.IP)
+						if *dnsOK {
+							logger.Printf("%s %5d:         ADD %d TLS handshake cut off, %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
+							blockedIPSet.add(tcpAddr.IP)
+						} else if host != "" {
+							logger.Printf("%s %5d:         ADD %d TLS handshake cut off, %s added to blocked list", mode, total, route, host)
+						}
 						blockedHostSet.add(host)
 					}
 				} else if route == 1 && !ruleBased && t > 30 && totalBytes < 1000 {
-					//logger.Printf("%s %5d:         ERR %d Suspiciously blocked connection to %s %s, %.1f s since last request", mode, total, route, host, (*out).RemoteAddr(), time.Since(*lastReq).Seconds())
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-						logger.Printf("%s %5d:         BLK %d Traffic likely cut off, %.1f s since last request, %s %s added to blocked list", mode, total, route, t, host, tcpAddr.IP)
+						logger.Printf("%s %5d:         ERR %d Connection to %s %s likely cut off, %.1f s since last request", mode, total, route, host, tcpAddr, t)
+						/*logger.Printf("%s %5d:         ADD %d Connection likely cut off, %.1f s since last request, %s %s added to blocked list", mode, total, route, t, host, tcpAddr.IP)
 						blockedIPSet.add(tcpAddr.IP)
-						blockedHostSet.add(host)
+						blockedHostSet.add(host)*/
 					}
 				}
 			} else if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
@@ -845,7 +853,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 				}
 				if route == 1 && !ruleBased && totalTime.Seconds() < blockSafeTime {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-						logger.Printf("%s %5d:         BLK %d TCP reset detected, %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
+						logger.Printf("%s %5d:         ADD %d TCP reset detected, %s %s added to blocked list", mode, total, route, host, tcpAddr.IP)
 						blockedIPSet.add(tcpAddr.IP)
 						blockedHostSet.add(host)
 					}
@@ -952,7 +960,7 @@ func receiveSend(conn *net.Conn, out io.Reader, ruleBased, single bool, mode, de
 			}
 			if !added && slow {
 				if tcpAddr := addr.(*net.TCPAddr); tcpAddr != nil {
-					logger.Printf("%s %5d:     SLO     %d %s %s added to slow list", mode, total, route, host, tcpAddr.IP)
+					logger.Printf("%s %5d:     ADD     %d %s %s added to slow list", mode, total, route, host, tcpAddr.IP)
 					slowIPSet.add(tcpAddr.IP)
 					slowHostSet.add(host)
 					if *slowClose {
