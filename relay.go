@@ -324,6 +324,7 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 			if err != nil {
 				break
 			}
+			// Only set time if successfully sent
 			*lastReq = time.Now()
 		}
 	} else {
@@ -666,7 +667,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 								logger.Printf("H %5d:          *  %d Remote connection closed, %d bytes received in %.1f s", total, route, totalBytes, totalTime.Seconds())
 							}
 							t := time.Since(*lastReq).Seconds()
-							if route == 1 && !ruleBased && t > 30 && totalBytes < 1000 {
+							if route == 1 && !ruleBased && t > 15 && totalBytes < 1000 {
 								//logger.Printf("H %5d:         ERR %d Suspiciously blocked connection to %s %s, %.1f s since last request", total, route, host, (*out).RemoteAddr(), time.Since(*lastReq).Seconds())
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 									logger.Printf("H %5d:         BLK %d Traffic likely cut off, %.1f s since last request, %s %s added to blocked list", total, route, t, host, tcpAddr.IP)
