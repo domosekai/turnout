@@ -87,7 +87,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
   ```shell
   # Start Turnout in the background
-  turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t -slow 100 -quiet &
+  turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t -slow 100 &
   
   # Option 1: Set up REDIRECT for all outgoing traffic (CPU-intensive)
   iptables -t nat -A PREROUTING -i br0 ! -d 192.168.0.0/16 -p tcp -j REDIRECT --to-ports 2222
@@ -161,7 +161,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
     
   - Unreliable ISP
   
-    Turnout is not supposed to be using with highly unreliable ISPs. If your ISP can't provide at least acceptable quality in international or cross-ISP connections, your better choice is an IP/CIDR based routing plan. Because in that case any benefit from automatic routing will be erased by the poor network condition.
+    Turnout is not supposed to be using with highly unreliable ISPs. If your ISP can't provide at least acceptable quality in international or cross-ISP connections (for instance packets are randomly dropped), your better choice is an IP/CIDR based routing plan. Because in that case any benefit from automatic routing will be erased by the poor network condition.
     
 ### Credits
 
