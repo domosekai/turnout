@@ -79,6 +79,8 @@ func handleHTTP(conn net.Conn, total int) {
 			} else if strings.Contains(err.Error(), "malformed") {
 				if *verbose {
 					logger.Printf("H %5d:         ERR   Local connection closed due to bad HTTP request, %d bytes sent. Error: %s", total, totalBytes, err)
+				} else {
+					logger.Printf("H %5d:         ERR   Bad HTTP request from client. Error: %s", total, err)
 				}
 			} else {
 				if *verbose {
@@ -95,7 +97,7 @@ func handleHTTP(conn net.Conn, total int) {
 		}
 		host, port := normalizeHostname(req.Host, "80")
 		if host == "" {
-			logger.Printf("H %5d: ERR           Invalid HTTP hostname: %s", total, req.Host)
+			logger.Printf("H %5d: ERR           Invalid HTTP host: %s", total, req.Host)
 			rejectHTTP(&conn)
 			break
 		}
@@ -147,6 +149,7 @@ func handleHTTP(conn net.Conn, total int) {
 				if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, ch, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out != nil {
 					new = false
 				} else {
+					logger.Printf("H %5d: ERR           No route found for %s", total, req.Host)
 					bufIn.Discard(bufIn.Buffered())
 					rejectHTTP(&conn)
 					continue
@@ -160,9 +163,7 @@ func handleHTTP(conn net.Conn, total int) {
 				if out == nil || err != nil {
 					ch = make(chan *http.Request, httpPipeline)
 					if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, ch, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out == nil {
-						if *verbose {
-							logger.Printf("H %5d: ERR           Failed to send HTTP header to server. Error: %s", total, err)
-						}
+						logger.Printf("H %5d: ERR           No route found for %s", total, req.Host)
 						bufIn.Discard(bufIn.Buffered())
 						rejectHTTP(&conn)
 						continue

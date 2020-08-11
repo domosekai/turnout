@@ -77,6 +77,8 @@ func handleFirstByte(bufIn *bufio.Reader, conn *net.Conn, mode, network, dest, p
 			}
 			if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, nil, nil, mode, network, dest, host, port, false, total, false, true, &lastReq); out != nil {
 				relayLocal(bufIn, out, mode, total, route, n, &lastReq)
+			} else {
+				logger.Printf("%s %5d: ERR           No route found for %s %s:%s", mode, total, host, dest, port)
 			}
 			return
 		}
@@ -94,6 +96,8 @@ func handleFirstByte(bufIn *bufio.Reader, conn *net.Conn, mode, network, dest, p
 			}
 			if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, req, nil, mode, network, dest, host, port, true, total, false, false, &lastReq); out != nil {
 				relayLocal(bufIn, out, mode, total, route, n, &lastReq)
+			} else {
+				logger.Printf("%s %5d: ERR           No route found for %s %s:%s", mode, total, host, dest, port)
 			}
 			return
 		}
@@ -102,6 +106,8 @@ func handleFirstByte(bufIn *bufio.Reader, conn *net.Conn, mode, network, dest, p
 	// Unknown protocol
 	if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, nil, nil, mode, network, dest, "", port, true, total, false, false, &lastReq); out != nil {
 		relayLocal(bufIn, out, mode, total, route, n, &lastReq)
+	} else {
+		logger.Printf("%s %5d: ERR           No route found for %s:%s", mode, total, dest, port)
 	}
 }
 
@@ -691,7 +697,9 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 								}
 							}
 						} else {
-							logger.Printf("H %5d:         ERR %d Remote connection closed, %d bytes received in %.1f s. Error: %s", total, route, totalBytes, totalTime.Seconds(), err)
+							if *verbose {
+								logger.Printf("H %5d:         ERR %d Remote connection closed, %d bytes received in %.1f s. Error: %s", total, route, totalBytes, totalTime.Seconds(), err)
+							}
 						}
 						mu.Lock()
 						received[route] += totalBytes
