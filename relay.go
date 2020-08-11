@@ -106,8 +106,12 @@ func handleFirstByte(bufIn *bufio.Reader, conn *net.Conn, mode, network, dest, p
 	// Unknown protocol
 	if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, nil, nil, mode, network, dest, "", port, true, total, false, false, &lastReq); out != nil {
 		relayLocal(bufIn, out, mode, total, route, n, &lastReq)
-	} else {
+	} else if n > 0 {
 		logger.Printf("%s %5d: ERR           No route found for %s:%s", mode, total, dest, port)
+	} else {
+		if *verbose {
+			logger.Printf("%s %5d: ERR           No response from %s:%s", mode, total, dest, port)
+		}
 	}
 }
 

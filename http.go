@@ -149,7 +149,7 @@ func handleHTTP(conn net.Conn, total int) {
 				if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, ch, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out != nil {
 					new = false
 				} else {
-					logger.Printf("H %5d: ERR           No route found for %s", total, req.Host)
+					logger.Printf("H %5d: ERR           No route found for %s:%s", total, host, port)
 					bufIn.Discard(bufIn.Buffered())
 					rejectHTTP(&conn)
 					continue
@@ -163,7 +163,7 @@ func handleHTTP(conn net.Conn, total int) {
 				if out == nil || err != nil {
 					ch = make(chan *http.Request, httpPipeline)
 					if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, ch, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out == nil {
-						logger.Printf("H %5d: ERR           No route found for %s", total, req.Host)
+						logger.Printf("H %5d: ERR           No route found for %s:%s", total, host, port)
 						bufIn.Discard(bufIn.Buffered())
 						rejectHTTP(&conn)
 						continue
