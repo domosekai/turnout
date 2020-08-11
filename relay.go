@@ -895,7 +895,7 @@ func matchHost(total int, mode, host string) (route int, ruleBased bool) {
 		route = findRouteForText(host, hostRules, true)
 		if route != 0 {
 			if *verbose {
-				logger.Printf("%s %5d:  *            Host rule matched for %s. Select route %d", mode, total, host, route)
+				logger.Printf("%s %5d: SET           Host rule matched for %s. Select route %d", mode, total, host, route)
 			}
 			ruleBased = true
 			return
@@ -904,14 +904,14 @@ func matchHost(total int, mode, host string) (route int, ruleBased bool) {
 	if blockedHostSet.contain(host) {
 		route = 2
 		if *verbose {
-			logger.Printf("%s %5d:  *            Host %s found in blocked list. Select route %d", mode, total, host, route)
+			logger.Printf("%s %5d: SET           Host %s found in blocked list. Select route %d", mode, total, host, route)
 		}
 		return
 	}
 	if slowHostSet.contain(host) {
 		route = 2
 		if *verbose {
-			logger.Printf("%s %5d:  *            Host %s found in slow list. Select route %d", mode, total, host, route)
+			logger.Printf("%s %5d: SET           Host %s found in slow list. Select route %d", mode, total, host, route)
 		}
 		return
 	}
@@ -926,7 +926,7 @@ func matchIP(total int, mode string, ip net.IP) (route int, ruleBased bool) {
 		}
 		if route != 0 {
 			if *verbose {
-				logger.Printf("%s %5d:  *            IP rule matched for %s. Select route %d", mode, total, ip, route)
+				logger.Printf("%s %5d: SET           IP rule matched for %s. Select route %d", mode, total, ip, route)
 			}
 			ruleBased = true
 			return
@@ -935,14 +935,14 @@ func matchIP(total int, mode string, ip net.IP) (route int, ruleBased bool) {
 	if blockedIPSet.contain(ip) {
 		route = 2
 		if *verbose {
-			logger.Printf("%s %5d:  *            IP %s found in blocked list. Select route %d", mode, total, ip, route)
+			logger.Printf("%s %5d: SET           IP %s found in blocked list. Select route %d", mode, total, ip, route)
 		}
 		return
 	}
 	if slowIPSet.contain(ip) {
 		route = 2
 		if *verbose {
-			logger.Printf("%s %5d:  *            IP %s found in slow list. Select route %d", mode, total, ip, route)
+			logger.Printf("%s %5d: SET           IP %s found in slow list. Select route %d", mode, total, ip, route)
 		}
 		return
 	}
