@@ -38,8 +38,8 @@ var (
 // Wait for first byte from client, should come immediately with ACK in the 3-way handshake
 // Otherwise it may never come (like FTP)
 func handleFirstByte(bufIn *bufio.Reader, conn *net.Conn, mode, network, dest, port string, sniff bool, total int) {
-	// git sometimes sends first byte with more than 200ms delay
-	(*conn).SetReadDeadline(time.Now().Add(time.Millisecond * 300))
+	// git on WSL may send first byte with more than 1s delay
+	(*conn).SetReadDeadline(time.Now().Add(time.Second * 3))
 	first := make([]byte, initialSize)
 	n, err := bufIn.Read(first)
 	if err == nil {
