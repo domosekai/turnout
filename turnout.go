@@ -36,7 +36,8 @@ var force4 = flag.Bool("4", false, "Force IPv4 connections out of route 1")
 var logFile = flag.String("log", "", "Path to log file")
 var logAppend = flag.Bool("append", false, "Append to log file if exists")
 var tickInterval = flag.Uint("tick", 15, "Logging interval (minutes) for status report")
-var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on route 1. Slower destinations will be put in a list and use route 2 from next time. (Port 80 and 443 only)")
+var speedPorts = flag.String("speedport", "80,443", "Ports subject to download speed check")
+var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on route 1. Slower destinations will be put in a list and use route 2 from next time.")
 var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in the slow list")
 var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1. This may break connections.")
 var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked list")
@@ -61,6 +62,7 @@ var (
 	received [3]int64
 	socks    []server
 	priority [4][]int
+	chkPorts []string
 	//dns2     string
 )
 
@@ -156,6 +158,10 @@ func main() {
 			logger.Printf("Loaded %d HTTP rules", len(httpRules))
 		}
 	}
+	if strings.ContainsAny(*speedPorts, "0123456789") {
+		chkPorts = strings.Split(strings.Trim(*speedPorts, ","), ",")
+		logger.Printf("Loaded %d speed check ports", len(chkPorts))
+	}
 	slowIPSet.timeout = time.Minute * time.Duration(*slowTimeout)
 	slowHostSet.timeout = time.Minute * time.Duration(*slowTimeout)
 	blockedIPSet.timeout = time.Minute * time.Duration(*blockedTimeout)
@@ -169,7 +175,7 @@ func main() {
 				logger.Printf("STATUS Open connections per route: Local %d Remote %d / %d", open[0], open[1], open[2])
 				logger.Printf("STATUS Route 1 Sent %.1f MB Recv %.1f MB / Route 2 Sent %.1f MB Recv %.1f MB",
 					float64(sent[1])/1000000, float64(received[1])/1000000, float64(sent[2])/1000000, float64(received[2])/1000000)
-				logger.Printf("STATUS Active goroutines per route: Dispatchers %d Workers %d / %d", jobs[0], jobs[1], jobs[2])
+				//logger.Printf("STATUS Active goroutines per route: Dispatchers %d Workers %d / %d", jobs[0], jobs[1], jobs[2])
 			}
 		}()
 	}

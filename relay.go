@@ -948,7 +948,7 @@ func matchIP(total int, mode string, ip net.IP) (route int, ruleBased bool) {
 }
 
 func receiveSend(conn *net.Conn, out io.Reader, ruleBased, single bool, mode, dest, host, port string, addr net.Addr, total, route int, lastReq *time.Time, lastBytes int64) (bytes int64, err error) {
-	if route == 1 && *slowSpeed > 0 && !ruleBased && (port == "80" || port == "443") {
+	if route == 1 && *slowSpeed > 0 && !ruleBased && contain(chkPorts, port) {
 		var sample int64
 		accum := lastBytes
 		sampleStart := time.Now()
@@ -1009,4 +1009,13 @@ func receiveSend(conn *net.Conn, out io.Reader, ruleBased, single bool, mode, de
 		bytes, err = io.Copy(*conn, out)
 	}
 	return
+}
+
+func contain(strs []string, s string) bool {
+	for _, v := range strs {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
