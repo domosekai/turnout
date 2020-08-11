@@ -130,7 +130,7 @@ func normalizeHostname(host, defaultPort string) (string, string) {
 	return h, defaultPort
 }
 
-func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, sniffedHost, port string,
+func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
 	successive bool, total int, connection, tls bool, lastReq *time.Time) (*net.Conn, int) {
 	mu.Lock()
 	jobs[0]++
@@ -154,16 +154,21 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool,
 	ok1, ok2 := -1, -1
 	var available1, available2 int
 
+	// dest can be IP or hostname, while host should contain hostname only
+	if net.ParseIP(host) != nil {
+		host = ""
+	}
+
 	// Match rules
 	route := 0
 	ruleBased := false
-	if sniffedHost != "" {
-		route, ruleBased = matchHost(total, mode, sniffedHost)
+	if host != "" {
+		route, ruleBased = matchHost(total, mode, host)
 	}
 	if route == 0 {
 		if ip := net.ParseIP(dest); ip != nil {
-			// dest is IP
-			if *dnsOK {
+			// dest is IP, match IP rules if dns is ok or hostname is not sniffed
+			if *dnsOK || host == "" {
 				route, ruleBased = matchIP(total, mode, ip)
 			}
 		} else {
@@ -180,12 +185,12 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool,
 	}
 	totalTimeout := 1
 	if route == 0 || route == 1 {
-		go handleRemote(bufIn, conn, &out1, first, firstFull, ruleBased, firstReq, reqs, mode, net1, dest, sniffedHost, port, int(*r1Timeout), total, 1, 1, start[0], try1, do1, stop2, connection, tls, lastReq)
+		go handleRemote(bufIn, conn, &out1, first, firstFull, ruleBased, firstReq, reqs, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start[0], try1, do1, stop2, connection, tls, lastReq)
 		totalTimeout += int(*r1Timeout)
 	}
 	if route == 0 || route == 2 {
 		for i, v := range socks {
-			go handleRemote(bufIn, conn, &out2[i], first, firstFull, ruleBased, firstReq, reqs, mode, net2, dest, sniffedHost, port, int(*r2Timeout), total, 2, i+1, start[v.pri], try2, do2, stop2, connection, tls, lastReq)
+			go handleRemote(bufIn, conn, &out2[i], first, firstFull, ruleBased, firstReq, reqs, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start[v.pri], try2, do2, stop2, connection, tls, lastReq)
 			totalTimeout += int(*r2Timeout)
 		}
 	}
@@ -361,14 +366,14 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 	(*out).Close()
 }
 
-func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFull, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, sniffedHost, port string,
+func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFull, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
 	timeout, total, route, server int, start chan bool, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
 	mu.Lock()
 	jobs[route]++
 	mu.Unlock()
 	select {
 	case <-start:
-		doRemote(bufIn, conn, out, firstOut, firstFull, ruleBased, firstReq, reqs, mode, network, dest, sniffedHost, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
+		doRemote(bufIn, conn, out, firstOut, firstFull, ruleBased, firstReq, reqs, mode, network, dest, host, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
 	case s := <-do:
 		do <- s
 	}
@@ -377,7 +382,7 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, fir
 	mu.Unlock()
 }
 
-func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFull, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, sniffedHost, port string,
+func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFull, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
 	timeout, total, route, server int, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
 	var dp string
 	var err error
@@ -394,8 +399,8 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 			try <- 0
 			return
 		}
-		if sniffedHost != "" {
-			dp = net.JoinHostPort(sniffedHost, port)
+		if host != "" {
+			dp = net.JoinHostPort(host, port)
 		} else {
 			dp = net.JoinHostPort(dest, port)
 		}
@@ -479,19 +484,14 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 		mu.Unlock()
 	}()
 
-	// Only save hostname in host
+	// Save hostname in host
 	destIsIP := net.ParseIP(dest) != nil
-	var host string
-	if sniffedHost != "" && net.ParseIP(sniffedHost) == nil {
-		host = sniffedHost
-	}
 	if host == "" && !destIsIP {
 		host = dest
 	}
 
-	// Match IP rules in HTTP proxy mode if DNS is trusted
 	if route == 1 && !ruleBased && *dnsOK && !destIsIP {
-		// dest is hostname
+		// dest is hostname, match IP rules before sending first byte if DNS is ok
 		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
 			newRoute, ruleBased = matchIP(total, mode, tcpAddr.IP)
@@ -620,8 +620,8 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 		}
 	}
 
-	// Match IP rules in both modes after TLS and HTTP check if DNS is not trusted
-	if route == 1 && !ruleBased && !*dnsOK {
+	// Match IP rules after TLS and HTTP check if DNS is not OK and hostname is available
+	if route == 1 && !ruleBased && !*dnsOK && host != "" {
 		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
 			newRoute, ruleBased = matchIP(total, mode, tcpAddr.IP)
@@ -759,16 +759,17 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 					cr := newChunkedReader(bufOut)
 					n, bytes, err := cr.copy(conn)
 					totalBytes += bytes
-					if errors.Is(err, io.EOF) {
+					if err == nil || errors.Is(err, io.EOF) {
 						if *verbose {
 							logger.Printf("H %5d:      *      %d Parsed %d chunks and %d bytes", total, route, n, bytes)
 						}
 					} else {
-						if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
+						if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") ||
+							strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") || errors.Is(err, io.ErrUnexpectedEOF) {
 							if *verbose {
 								logger.Printf("H %5d:     RST     %d Chunks parsing reset by server, %.1f s since last request. Error: %s", total, route, time.Since(*lastReq).Seconds(), err)
 							}
-							if route == 1 && !ruleBased && time.Since(*lastReq).Seconds() < blockSafeTime {
+							if route == 1 && !ruleBased {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s %s added to blocked list", total, route, host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
@@ -809,11 +810,12 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 					if err != nil && !errors.Is(err, io.EOF) {
 						// Linux: "read: connection reset by peer"
 						// Windows: "wsarecv: An existing connection was forcibly closed by the remote host."
-						if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
+						if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") ||
+							strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") || errors.Is(err, io.ErrUnexpectedEOF) {
 							if *verbose {
 								logger.Printf("H %5d:     RST     %d HTTP body fetching reset by server, %.1f s since last request. Error: %s", total, route, time.Since(*lastReq).Seconds(), err)
 							}
-							if route == 1 && !ruleBased && time.Since(*lastReq).Seconds() < blockSafeTime {
+							if route == 1 && !ruleBased {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s %s added to blocked list", total, route, host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
