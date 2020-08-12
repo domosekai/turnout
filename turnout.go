@@ -50,26 +50,23 @@ var version = "unknown"
 var builddate = "unknown"
 
 type connection struct {
-	source, dest    string
-	sport, dport    string
-	host            string
-	destIsIP        bool
-	bufIn, bufOut   *bufio.Reader
-	in              net.Conn
-	out             *net.Conn
-	sniff           bool
-	successive      bool
-	first           []byte
-	firstIsFull     bool
-	ruleBased       bool
-	firstReq        *http.Request
-	reqs            chan *http.Request
-	mode, network   string
-	total           int
-	timeout         int
-	route, server   int
-	connection, tls bool
-	lastReq         time.Time
+	source, dest  string
+	sport, dport  string
+	host          string
+	in            net.Conn
+	out           *net.Conn
+	bufIn         *bufio.Reader
+	mode, network string
+	first         []byte
+	firstIsFull   bool
+	currentReq    *http.Request
+	reqs          chan *http.Request
+	total         int
+	route, server int
+	ruleBased     bool
+	hasConnection bool
+	tls           bool
+	lastReq       time.Time
 }
 
 type server struct {

@@ -32,79 +32,79 @@ func doHTTP(total *int) {
 	defer listener.Close()
 	logger.Printf("HTTP proxy started on TCP %s", addr)
 	for {
-		conn, err := listener.Accept()
+		var conn connection
+		var err error
+		conn.in, err = listener.Accept()
 		if err != nil {
 			logger.Printf("Failed to accept new connection. Error: %s", err)
 			continue
 		}
+		conn.bufIn = bufio.NewReader(conn.in)
 		mu.Lock()
 		*total++
 		open[0]++
+		conn.total = *total
 		mu.Unlock()
-		go handleHTTP(conn, *total)
+		go conn.handleHTTP()
 	}
 }
 
-func handleHTTP(conn net.Conn, total int) {
+func (c *connection) handleHTTP() {
 	defer func() {
-		conn.Close()
+		c.in.Close()
 		mu.Lock()
 		open[0]--
 		mu.Unlock()
 	}()
 
 	new := true
-	var currentHost, currentPort string
 	var totalBytes int64
-	var out *net.Conn
-	var route int
 	if *verbose {
-		logger.Printf("H %5d:  *            New %s %s -> %s", total, conn.LocalAddr().Network(), conn.RemoteAddr(), conn.LocalAddr())
+		logger.Printf("H %5d:  *            New %s %s -> %s", c.total, c.in.LocalAddr().Network(), c.in.RemoteAddr(), c.in.LocalAddr())
 	}
-	bufIn := bufio.NewReader(conn)
-	var lastReq time.Time
-	var ch chan *http.Request
+	c.mode = "H"
+	c.network = "tcp"
 
 	for {
-		req, err := http.ReadRequest(bufIn)
+		req, err := http.ReadRequest(c.bufIn)
 		if err != nil {
 			if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") {
 				if *verbose {
-					logger.Printf("H %5d:          *    Local connection closed, %d bytes sent", total, totalBytes)
+					logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes.", c.total, totalBytes)
 				}
 			} else if strings.Contains(err.Error(), "reset") {
 				if *verbose {
-					logger.Printf("H %5d:          *    Local connection reset, %d bytes sent", total, totalBytes)
+					logger.Printf("H %5d:          *    Local connection reset. Sent %d bytes.", c.total, totalBytes)
 				}
 			} else if strings.Contains(err.Error(), "malformed") {
 				if *verbose {
-					logger.Printf("H %5d:         ERR   Local connection closed due to bad HTTP request, %d bytes sent. Error: %s", total, totalBytes, err)
+					logger.Printf("H %5d:         ERR   Local connection closed due to bad HTTP request. Sent %d bytes. Error: %s", c.total, totalBytes, err)
 				} else {
-					logger.Printf("H %5d:         ERR   Bad HTTP request from client. Error: %s", total, err)
+					logger.Printf("H %5d:         ERR   Bad HTTP request from client. Error: %s", c.total, err)
 				}
 			} else {
 				if *verbose {
-					logger.Printf("H %5d:          *    Local connection closed, %d bytes sent. Error: %s", total, totalBytes, err)
+					logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes. Error: %s", c.total, totalBytes, err)
 				}
 			}
 			mu.Lock()
-			sent[route] += totalBytes
+			sent[c.route] += totalBytes
 			mu.Unlock()
 			break
 		}
 		if *verbose {
-			logger.Printf("H %5d:  *            HTTP %s Host %s Content-length %d", total, req.Method, req.Host, req.ContentLength)
+			logger.Printf("H %5d:  *            HTTP %s Host %s Content-length %d", c.total, req.Method, req.Host, req.ContentLength)
 		}
 		host, port := normalizeHostname(req.Host, "80")
 		if host == "" {
-			logger.Printf("H %5d: ERR           Invalid HTTP host: %s", total, req.Host)
-			rejectHTTP(&conn)
+			logger.Printf("H %5d: ERR           Invalid HTTP host: %s", c.total, req.Host)
+			rejectHTTP(c.in)
 			break
 		}
 
 		if req.Method == "CONNECT" {
-			if out != nil {
-				(*out).Close()
+			if c.out != nil {
+				(*c.out).Close()
 			}
 			resp := &http.Response{
 				Status:     "200 Connection established",
@@ -114,112 +114,128 @@ func handleHTTP(conn net.Conn, total int) {
 				ProtoMinor: 1,
 			}
 			respBytes, _ := httputil.DumpResponse(resp, false)
-			if _, err := conn.Write(respBytes); err != nil {
+			if _, err := c.in.Write(respBytes); err != nil {
 				break
 			}
-			handleFirstByte(bufIn, &conn, "H", "tcp", host, port, false, total)
+			c.dest = host
+			c.host = ""
+			c.dport = port
+			c.first = nil
+			c.currentReq = nil
+			c.tls = false
+			c.hasConnection = false
+			c.getFirstByte()
 			break
 		} else {
 			req.RequestURI = strings.TrimPrefix(req.RequestURI, "http://")
 			req.RequestURI = strings.TrimPrefix(req.RequestURI, net.JoinHostPort(host, port))
 			req.RequestURI = strings.TrimPrefix(req.RequestURI, req.Host)
 			req.RequestURI = strings.TrimPrefix(req.RequestURI, host)
-			connection := false
 			if req.Header.Get("Connection") == "" {
 				if value := req.Header.Get("Proxy-Connection"); value != "" {
 					req.Header.Add("Connection", value)
 					req.Close = shouldClose(req.ProtoMajor, req.ProtoMinor, req.Header)
 				}
+				c.hasConnection = false
 			} else {
-				connection = true
+				c.hasConnection = true
 			}
 			req.Header.Del("Proxy-Connection")
 			header, _ := httputil.DumpRequest(req, false)
 			totalBytes += int64(len(header))
-			if host != currentHost || port != currentPort {
-				currentHost = host
-				currentPort = port
+			if host != c.dest || port != c.dport {
+				c.dest = host
+				c.host = ""
+				c.dport = port
 				new = true
 			}
 			if new {
-				if out != nil {
-					(*out).Close()
+				if c.out != nil {
+					(*c.out).Close()
 				}
-				ch = make(chan *http.Request, httpPipeline)
-				if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, ch, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out != nil {
+				c.reqs = make(chan *http.Request, httpPipeline)
+				c.currentReq = req
+				c.first = header
+				c.firstIsFull = req.ContentLength != 0
+				c.tls = false
+				if c.getRoute() {
 					new = false
 				} else {
-					logger.Printf("H %5d: ERR           No route found for %s:%s", total, host, port)
-					bufIn.Discard(bufIn.Buffered())
-					rejectHTTP(&conn)
+					logger.Printf("H %5d: ERR           No route found for %s:%s", c.total, host, port)
+					c.bufIn.Discard(c.bufIn.Buffered())
+					rejectHTTP(c.in)
 					continue
 				}
 			} else {
 				var err error
-				if out != nil {
-					ch <- req
-					_, err = (*out).Write(header)
+				if c.out != nil {
+					c.reqs <- req
+					_, err = (*c.out).Write(header)
 				}
-				if out == nil || err != nil {
-					ch = make(chan *http.Request, httpPipeline)
-					if out, route = getRoute(bufIn, &conn, header, req.ContentLength != 0, req, ch, "H", "tcp", host, "", port, true, total, connection, false, &lastReq); out == nil {
-						logger.Printf("H %5d: ERR           No route found for %s:%s", total, host, port)
-						bufIn.Discard(bufIn.Buffered())
-						rejectHTTP(&conn)
+				if c.out == nil || err != nil {
+					c.reqs = make(chan *http.Request, httpPipeline)
+					c.currentReq = req
+					c.first = header
+					c.firstIsFull = req.ContentLength != 0
+					c.tls = false
+					if c.getRoute() {
+						logger.Printf("H %5d: ERR           No route found for %s:%s", c.total, host, port)
+						c.bufIn.Discard(c.bufIn.Buffered())
+						rejectHTTP(c.in)
 						continue
 					}
 				} else {
-					lastReq = time.Now()
+					c.lastReq = time.Now()
 				}
 			}
 			if req.ContentLength == -1 && len(req.TransferEncoding) > 0 && req.TransferEncoding[0] == "chunked" {
-				cr := newChunkedReader(bufIn)
-				n, bytes, err := cr.copy(out)
+				cr := newChunkedReader(c.bufIn)
+				n, bytes, err := cr.copy(*c.out)
 				totalBytes += bytes
 				if errors.Is(err, io.EOF) {
 					if *verbose {
-						logger.Printf("H %5d:  *            Parsed %d chunks and %d bytes", total, n, bytes)
+						logger.Printf("H %5d:  *            Parsed %d chunks and %d bytes", c.total, n, bytes)
 					}
 				} else {
 					if *verbose {
-						logger.Printf("H %5d: ERR           Parsed %d chunks and %d bytes but failed to sent to server. Error: %s", total, n, bytes, err)
+						logger.Printf("H %5d: ERR           Parsed %d chunks and %d bytes but failed to sent to server. Error: %s", c.total, n, bytes, err)
 					}
-					bufIn.Discard(bufIn.Buffered())
+					c.bufIn.Discard(c.bufIn.Buffered())
 					continue
 				}
 				// Write trailer
 				var trailer []byte
 				for {
-					line, err := bufIn.ReadSlice('\n')
+					line, err := c.bufIn.ReadSlice('\n')
 					trailer = append(trailer, line...)
 					if len(line) == 2 || err != nil {
-						n, _ := (*out).Write(trailer)
+						n, _ := (*c.out).Write(trailer)
 						totalBytes += int64(n)
 						break
 					}
 				}
-				lastReq = time.Now()
+				c.lastReq = time.Now()
 			} else if req.ContentLength != 0 {
-				bytes, err := io.Copy(*out, req.Body)
+				bytes, err := io.Copy(*c.out, req.Body)
 				totalBytes += bytes
 				req.Body.Close()
 				if err != nil {
 					if *verbose {
-						logger.Printf("H %5d: ERR           Failed to send HTTP body to server. Error: %s", total, err)
+						logger.Printf("H %5d: ERR           Failed to send HTTP body to server. Error: %s", c.total, err)
 					}
-					bufIn.Discard(bufIn.Buffered())
+					c.bufIn.Discard(c.bufIn.Buffered())
 					continue
 				}
-				lastReq = time.Now()
+				c.lastReq = time.Now()
 			}
 		}
 	}
-	if out != nil {
-		(*out).Close()
+	if c.out != nil {
+		(*c.out).Close()
 	}
 }
 
-func rejectHTTP(conn *net.Conn) {
+func rejectHTTP(conn net.Conn) {
 	resp := &http.Response{
 		Status:     "502 Bad Gateway", // Squid sends 502 on unreachable hosts, 503 on failed DNS, 200 on CONNECT method
 		StatusCode: 502,
@@ -228,5 +244,5 @@ func rejectHTTP(conn *net.Conn) {
 		ProtoMinor: 1,
 	}
 	respBytes, _ := httputil.DumpResponse(resp, false)
-	(*conn).Write(respBytes)
+	conn.Write(respBytes)
 }

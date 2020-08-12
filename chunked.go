@@ -63,19 +63,19 @@ func (cr *chunkedReader) beginChunk() []byte {
 	return line0
 }
 
-func (cr *chunkedReader) copy(w *net.Conn) (number int, n int64, err error) {
+func (cr *chunkedReader) copy(w net.Conn) (number int, n int64, err error) {
 	for cr.err == nil {
 		h := cr.beginChunk()
 		if cr.n > 0 {
-			(*w).Write(h)
+			w.Write(h)
 			var n0 int64
-			n0, cr.err = io.CopyN(*w, cr.r, int64(cr.n)+2)
+			n0, cr.err = io.CopyN(w, cr.r, int64(cr.n)+2)
 			n += n0 + int64(len(h))
 			cr.n = 0
 			number++
 		}
 		if cr.err == io.EOF {
-			(*w).Write(h)
+			w.Write(h)
 			n += int64(len(h))
 			return number, n, cr.err
 		}

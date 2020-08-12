@@ -54,8 +54,8 @@ func doTransparent(total *int) {
 		mu.Lock()
 		*total++
 		open[0]++
-		mu.Unlock()
 		conn.total = *total
+		mu.Unlock()
 		go conn.handleLocal()
 	}
 }
@@ -108,6 +108,5 @@ func (c *connection) handleLocal() {
 	c.dest, c.dport, _ = net.SplitHostPort(dest)
 	c.bufIn = bufio.NewReader(c.in)
 	c.mode = "T"
-	c.sniff = true
-	c.handleFirstByte()
+	c.getFirstByte()
 }
