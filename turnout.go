@@ -41,9 +41,10 @@ var tickInterval = flag.Uint("tick", 15, "Logging interval (minutes) for status 
 var speedPorts = flag.String("speedport", "80,443", "Ports subject to download speed check")
 var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on route 1. Slower destinations will be put in a list and use route 2 from next time.")
 var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in the slow list")
-var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1. This may break connections.")
+var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1 (may break connections)")
 var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked list")
 var dnsOK = flag.Bool("dnsok", false, "Trust system DNS resolver (allowing fast IP rule matching)")
+var fastRoute = flag.Bool("fastroute", false, "Do not enforce the same route for a given destination (may break some websites)")
 var verbose = flag.Bool("verbose", false, "Verbose logging")
 var httpBadStatus = flag.String("badhttp", "", "Drop specified (non-TLS) HTTP response from route 1 (e.g. 403,404,5*)")
 var version = "unknown"
@@ -85,6 +86,7 @@ var (
 	socks    []server
 	priority [4][]int
 	chkPorts []string
+	rt       routingTable
 	//dns2     string
 )
 
@@ -184,6 +186,7 @@ func main() {
 		chkPorts = strings.Split(strings.Trim(*speedPorts, ","), ",")
 		logger.Printf("Loaded %d speed check ports", len(chkPorts))
 	}
+	rt.table = make(map[string]*routeEntry)
 	slowIPSet.timeout = time.Minute * time.Duration(*slowTimeout)
 	slowHostSet.timeout = time.Minute * time.Duration(*slowTimeout)
 	blockedIPSet.timeout = time.Minute * time.Duration(*blockedTimeout)
@@ -197,7 +200,9 @@ func main() {
 				logger.Printf("STATUS Open connections per route: Local %d Remote %d / %d", open[0], open[1], open[2])
 				logger.Printf("STATUS Route 1 Sent %.1f MB Recv %.1f MB / Route 2 Sent %.1f MB Recv %.1f MB",
 					float64(sent[1])/1000000, float64(received[1])/1000000, float64(sent[2])/1000000, float64(received[2])/1000000)
-				//logger.Printf("STATUS Active goroutines per route: Dispatchers %d Workers %d / %d", jobs[0], jobs[1], jobs[2])
+				if *verbose {
+					logger.Printf("STATUS Active goroutines per route: Dispatchers %d Workers %d / %d", jobs[0], jobs[1], jobs[2])
+				}
 			}
 		}()
 	}

@@ -169,19 +169,29 @@ func (c *connection) getRoute() bool {
 
 	// Match rules
 	var route int
-	var matched bool
+	var server int
 	if c.host != "" {
-		route, matched = matchHost(c.total, c.mode, c.host)
+		route, c.ruleBased = matchHost(c.total, c.mode, c.host)
 	}
 	if route == 0 {
 		if ip := net.ParseIP(c.dest); ip != nil {
 			// dest is IP, match IP rules if dns is ok or hostname is not sniffed
 			if *dnsOK || c.host == "" {
-				route, matched = matchIP(c.total, c.mode, ip)
+				route, c.ruleBased = matchIP(c.total, c.mode, ip)
 			}
 		} else {
 			// dest is hostname
-			route, matched = matchHost(c.total, c.mode, c.dest)
+			route, c.ruleBased = matchHost(c.total, c.mode, c.dest)
+		}
+	}
+	// Route 1 has only one server, skip lookup
+	if route != 1 && !*fastRoute {
+		if r, s, m := rt.get(c.dest, c.host); m && (r == route || route == 0) {
+			route = r
+			server = s
+			if *verbose {
+				logger.Printf("%s %5d: EXT           Connections to %s %s exist. Select route %d server %d", c.mode, c.total, c.host, c.dest, route, server)
+			}
 		}
 	}
 
@@ -191,16 +201,23 @@ func (c *connection) getRoute() bool {
 	if *force4 {
 		net1 = "tcp4"
 	}
-	c.ruleBased = matched
 	totalTimeout := 1
 	if route == 0 || route == 1 {
 		go c.handleRemote(&out1, net1, int(*r1Timeout), 1, 1, start[0], try1, do1, stop2)
 		totalTimeout += int(*r1Timeout)
+		available1 = 1
 	}
 	if route == 0 || route == 2 {
-		for i, v := range socks {
-			go c.handleRemote(&out2[i], net2, int(*r2Timeout), 2, i+1, start[v.pri], try2, do2, stop2)
+		if server == 0 {
+			for i, v := range socks {
+				go c.handleRemote(&out2[i], net2, int(*r2Timeout), 2, i+1, start[v.pri], try2, do2, stop2)
+				totalTimeout += int(*r2Timeout)
+			}
+			available2 = len(socks)
+		} else {
+			go c.handleRemote(&out2[server-1], net2, int(*r2Timeout), 2, server, start[1], try2, do2, stop2)
 			totalTimeout += int(*r2Timeout)
+			available2 = 1
 		}
 	}
 
@@ -209,27 +226,21 @@ func (c *connection) getRoute() bool {
 	switch route {
 	case 0:
 		start[0] <- true
-		if !successive {
+		if !successive && server == 0 {
 			for range priority[1] {
 				start[1] <- true
 			}
 		}
-		available1 = 1
-		available2 = len(socks)
 	case 1:
 		start[0] <- true
-		available1 = 1
-		available2 = 0
 	case 2:
-		if !successive {
+		if !successive && server == 0 {
 			for range priority[1] {
 				start[1] <- true
 			}
 		} else {
 			start[1] <- true
 		}
-		available1 = 0
-		available2 = len(socks)
 	default:
 		return false
 	}
@@ -253,6 +264,9 @@ func (c *connection) getRoute() bool {
 		// Route 1 sends status, bad2 is set by this time
 		case ok1 = <-try1:
 			if ok1 > 0 {
+				if !*fastRoute {
+					rt.add(c.dest, c.host, 1, 1)
+				}
 				do1 <- 1
 				if available2 > 0 {
 					do2 <- 0
@@ -267,6 +281,9 @@ func (c *connection) getRoute() bool {
 					start[1] <- true
 				}
 				if server2 > 0 {
+					if !*fastRoute {
+						rt.add(c.dest, c.host, 2, server2)
+					}
 					do2 <- server2
 					c.route = 2
 					c.out = &out2[server2-1]
@@ -282,12 +299,18 @@ func (c *connection) getRoute() bool {
 			if ok2 > 0 && available2 > 0 && server2 == 0 {
 				server2 = ok2
 				if available1 == 0 {
+					if !*fastRoute {
+						rt.add(c.dest, c.host, 2, server2)
+					}
 					do2 <- server2
 					c.route = 2
 					c.out = &out2[server2-1]
 					c.server = server2
 					return true
 				} else if !wait {
+					if !*fastRoute {
+						rt.add(c.dest, c.host, 2, server2)
+					}
 					do2 <- server2
 					do1 <- 0
 					c.route = 2
@@ -325,6 +348,9 @@ func (c *connection) getRoute() bool {
 		case <-timer1.C:
 			wait = false
 			if server2 > 0 && available2 > 0 {
+				if !*fastRoute {
+					rt.add(c.dest, c.host, 2, server2)
+				}
 				do2 <- server2
 				if available1 > 0 {
 					do1 <- 0
@@ -587,7 +613,7 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 		// Check response validity
 		if c.mode == "H" && c.currentReq != nil {
 			if *verbose {
-				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms", c.total, route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
+				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms.", c.total, route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
 			}
 			if route == 1 && !c.ruleBased && findRouteForText(firstResp.Status, httpRules, false) == 2 {
 				if *verbose {
@@ -598,7 +624,7 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 			}
 		} else {
 			if *verbose {
-				logger.Printf("%s %5d:      *      %d First %d bytes from server. TTFB %d ms", c.mode, c.total, route, n, ttfb.Milliseconds())
+				logger.Printf("%s %5d:      *      %d First %d bytes from server. TTFB %d ms.", c.mode, c.total, route, n, ttfb.Milliseconds())
 			}
 			if c.currentReq != nil {
 				if resp, err := readResponseStatus(bufio.NewReader(bytes.NewReader(firstIn[:n]))); err == nil {
@@ -663,6 +689,9 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 	if doServer == server {
 		// Drain channel so that sender will not block
 		defer func() {
+			if !*fastRoute {
+				rt.del(c.dest, c.host)
+			}
 			for len(c.reqs) > 0 {
 				<-c.reqs
 			}

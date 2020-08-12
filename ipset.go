@@ -29,6 +29,17 @@ type hostSet struct {
 	rw      sync.RWMutex
 }
 
+type routeEntry struct {
+	route  int
+	server int
+	count  int
+}
+
+type routingTable struct {
+	table map[string]*routeEntry
+	rw    sync.RWMutex
+}
+
 func (set *ipSet) add(ip net.IP) {
 	set.rw.Lock()
 	set.list = append(set.list, ipSetEntry{ip, time.Now()})
@@ -71,4 +82,60 @@ func (set *hostSet) contain(host string) bool {
 		}
 	}
 	return false
+}
+
+func (t *routingTable) add(dest, host string, route, server int) {
+	var key string
+	if host != "" {
+		key = host
+	} else {
+		key = dest
+	}
+	t.rw.Lock()
+	if entry := t.table[key]; entry != nil {
+		// update route and server to latest
+		entry.route = route
+		entry.server = server
+		entry.count++
+	} else {
+		t.table[key] = &routeEntry{
+			route:  route,
+			server: server,
+			count:  1,
+		}
+	}
+	t.rw.Unlock()
+}
+
+func (t *routingTable) del(dest, host string) {
+	var key string
+	if host != "" {
+		key = host
+	} else {
+		key = dest
+	}
+	t.rw.Lock()
+	if entry := t.table[key]; entry != nil && entry.count > 1 {
+		entry.count--
+	} else {
+		delete(t.table, key)
+	}
+	t.rw.Unlock()
+}
+
+func (t *routingTable) get(dest, host string) (route, server int, matched bool) {
+	var key string
+	if host != "" {
+		key = host
+	} else {
+		key = dest
+	}
+	t.rw.RLock()
+	if entry := t.table[key]; entry != nil && entry.count > 0 {
+		route = entry.route
+		server = entry.server
+		matched = true
+	}
+	t.rw.RUnlock()
+	return
 }
