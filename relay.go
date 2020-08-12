@@ -37,82 +37,85 @@ var (
 
 // Wait for first byte from client, should come immediately with ACK in the 3-way handshake
 // Otherwise it may never come (like FTP)
-func handleFirstByte(bufIn *bufio.Reader, conn *net.Conn, mode, network, dest, port string, sniff bool, total int) {
+func (c *connection) handleFirstByte() {
 	// git on WSL may send first byte with more than 1s delay
-	(*conn).SetReadDeadline(time.Now().Add(time.Second * 3))
+	c.in.SetReadDeadline(time.Now().Add(time.Second * 3))
 	first := make([]byte, initialSize)
-	n, err := bufIn.Read(first)
+	n, err := c.bufIn.Read(first)
 	if err == nil {
 		if *verbose {
-			logger.Printf("%s %5d:  *            First %d bytes from client", mode, total, n)
+			logger.Printf("%s %5d:  *            First %d bytes from client", c.mode, c.total, n)
 		}
 	} else if !strings.Contains(err.Error(), "time") {
 		if *verbose {
-			logger.Printf("%s %5d:  *            Failed to read first byte from client. Error: %s", mode, total, err)
+			logger.Printf("%s %5d:  *            Failed to read first byte from client. Error: %s", c.mode, c.total, err)
 		}
 		return
 	}
-	(*conn).SetReadDeadline(time.Time{})
-	var lastReq time.Time
+	c.in.SetReadDeadline(time.Time{})
 
 	// TLS Client Hello
 	if n > recordHeaderLen && recordType(first[0]) == recordTypeHandshake && first[recordHeaderLen] == typeClientHello {
 		if m := new(clientHelloMsg); m.unmarshal(first[recordHeaderLen:n]) {
-			sniffedHost := ""
 			if m.serverName != "" {
 				if *verbose {
-					logger.Printf("%s %5d:  *            TLS SNI %s", mode, total, m.serverName)
+					logger.Printf("%s %5d:  *            TLS SNI %s", c.mode, c.total, m.serverName)
 				}
-				if sniff {
-					sniffedHost, _ = normalizeHostname(m.serverName, port)
+				if c.sniff {
+					c.host, _ = normalizeHostname(m.serverName, c.dport)
 				}
 			} else if m.esni {
 				if *verbose {
-					logger.Printf("%s %5d:  *            TLS ESNI", mode, total)
+					logger.Printf("%s %5d:  *            TLS ESNI", c.mode, c.total)
 				}
 			} else {
 				if *verbose {
-					logger.Printf("%s %5d:  *            TLS Client Hello", mode, total)
+					logger.Printf("%s %5d:  *            TLS Client Hello", c.mode, c.total)
 				}
 			}
-			if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, nil, nil, mode, network, dest, sniffedHost, port, false, total, false, true, &lastReq); out != nil {
-				relayLocal(bufIn, out, mode, total, route, n, &lastReq)
+			c.first = first[:n]
+			c.firstIsFull = n == initialSize
+			c.successive = false
+			c.connection = false
+			c.tls = true
+			if c.getRoute() {
+				//relayLocal(bufIn, out, mode, total, route, n, &lastReq)
 			} else {
-				logger.Printf("%s %5d: ERR           No route found for %s %s:%s", mode, total, sniffedHost, dest, port)
+				logger.Printf("%s %5d: ERR           No route found for %s %s:%s", c.mode, c.total, c.host, c.dest, c.dport)
 			}
 			return
 		}
 	}
+	/*
+		// HTTP
+		if n > 0 {
+			if req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(first[:n]))); err == nil {
+				if *verbose {
+					logger.Printf("%s %5d:  *            HTTP %s Host %s Content-length %d", mode, total, req.Method, req.Host, req.ContentLength)
+				}
+				sniffedHost := ""
+				if sniff {
+					sniffedHost, _ = normalizeHostname(req.Host, port)
+				}
+				if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, req, nil, mode, network, dest, sniffedHost, port, true, total, false, false, &lastReq); out != nil {
+					relayLocal(bufIn, out, mode, total, route, n, &lastReq)
+				} else {
+					logger.Printf("%s %5d: ERR           No route found for %s %s:%s", mode, total, sniffedHost, dest, port)
+				}
+				return
+			}
+		}
 
-	// HTTP
-	if n > 0 {
-		if req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(first[:n]))); err == nil {
+		// Unknown protocol
+		if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, nil, nil, mode, network, dest, "", port, true, total, false, false, &lastReq); out != nil {
+			relayLocal(bufIn, out, mode, total, route, n, &lastReq)
+		} else if n > 0 {
+			logger.Printf("%s %5d: ERR           No route found for %s:%s", mode, total, dest, port)
+		} else {
 			if *verbose {
-				logger.Printf("%s %5d:  *            HTTP %s Host %s Content-length %d", mode, total, req.Method, req.Host, req.ContentLength)
+				logger.Printf("%s %5d: ERR           No response from %s:%s", mode, total, dest, port)
 			}
-			sniffedHost := ""
-			if sniff {
-				sniffedHost, _ = normalizeHostname(req.Host, port)
-			}
-			if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, req, nil, mode, network, dest, sniffedHost, port, true, total, false, false, &lastReq); out != nil {
-				relayLocal(bufIn, out, mode, total, route, n, &lastReq)
-			} else {
-				logger.Printf("%s %5d: ERR           No route found for %s %s:%s", mode, total, sniffedHost, dest, port)
-			}
-			return
-		}
-	}
-
-	// Unknown protocol
-	if out, route := getRoute(bufIn, conn, first[:n], n == initialSize, nil, nil, mode, network, dest, "", port, true, total, false, false, &lastReq); out != nil {
-		relayLocal(bufIn, out, mode, total, route, n, &lastReq)
-	} else if n > 0 {
-		logger.Printf("%s %5d: ERR           No route found for %s:%s", mode, total, dest, port)
-	} else {
-		if *verbose {
-			logger.Printf("%s %5d: ERR           No response from %s:%s", mode, total, dest, port)
-		}
-	}
+		}*/
 }
 
 func normalizeHostname(host, defaultPort string) (string, string) {
@@ -130,8 +133,7 @@ func normalizeHostname(host, defaultPort string) (string, string) {
 	return h, defaultPort
 }
 
-func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
-	successive bool, total int, connection, tls bool, lastReq *time.Time) (*net.Conn, int) {
+func (c *connection) getRoute() bool {
 	mu.Lock()
 	jobs[0]++
 	mu.Unlock()
@@ -155,42 +157,45 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool,
 	var available1, available2 int
 
 	// dest can be IP or hostname, while host should contain hostname only
-	if net.ParseIP(host) != nil {
-		host = ""
+	if net.ParseIP(c.host) != nil {
+		c.host = ""
+	}
+	c.destIsIP = net.ParseIP(c.dest) != nil
+	if c.host == "" && !c.destIsIP {
+		c.host = c.dest
 	}
 
 	// Match rules
-	route := 0
-	ruleBased := false
-	if host != "" {
-		route, ruleBased = matchHost(total, mode, host)
+	var route int
+	if c.host != "" {
+		route, c.ruleBased = matchHost(c.total, c.mode, c.host)
 	}
 	if route == 0 {
-		if ip := net.ParseIP(dest); ip != nil {
+		if ip := net.ParseIP(c.dest); ip != nil {
 			// dest is IP, match IP rules if dns is ok or hostname is not sniffed
-			if *dnsOK || host == "" {
-				route, ruleBased = matchIP(total, mode, ip)
+			if *dnsOK || c.host == "" {
+				route, c.ruleBased = matchIP(c.total, c.mode, ip)
 			}
 		} else {
 			// dest is hostname
-			route, ruleBased = matchHost(total, mode, dest)
+			route, c.ruleBased = matchHost(c.total, c.mode, c.dest)
 		}
 	}
 
 	// Dispatch workers
-	net1 := network
-	net2 := network
+	net1 := c.network
+	net2 := c.network
 	if *force4 {
 		net1 = "tcp4"
 	}
 	totalTimeout := 1
 	if route == 0 || route == 1 {
-		go handleRemote(bufIn, conn, &out1, first, firstFull, ruleBased, firstReq, reqs, mode, net1, dest, host, port, int(*r1Timeout), total, 1, 1, start[0], try1, do1, stop2, connection, tls, lastReq)
+		go c.handleRemote(&out1, net1, int(*r1Timeout), 1, 1, start[0], try1, do1, stop2)
 		totalTimeout += int(*r1Timeout)
 	}
 	if route == 0 || route == 2 {
 		for i, v := range socks {
-			go handleRemote(bufIn, conn, &out2[i], first, firstFull, ruleBased, firstReq, reqs, mode, net2, dest, host, port, int(*r2Timeout), total, 2, i+1, start[v.pri], try2, do2, stop2, connection, tls, lastReq)
+			go c.handleRemote(&out2[i], net2, int(*r2Timeout), 2, i+1, start[v.pri], try2, do2, stop2)
 			totalTimeout += int(*r2Timeout)
 		}
 	}
@@ -199,7 +204,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool,
 	switch route {
 	case 0:
 		start[0] <- true
-		if !successive {
+		if !c.successive {
 			for range priority[1] {
 				start[1] <- true
 			}
@@ -211,7 +216,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool,
 		available1 = 1
 		available2 = 0
 	case 2:
-		if !successive {
+		if !c.successive {
 			for range priority[1] {
 				start[1] <- true
 			}
@@ -221,7 +226,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool,
 		available1 = 0
 		available2 = len(socks)
 	default:
-		return nil, 0
+		return false
 	}
 
 	// Wait for first byte from server
@@ -247,19 +252,24 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool,
 				if available2 > 0 {
 					do2 <- 0
 				}
-				return &out1, 1
+				c.route = 1
+				c.out = &out1
+				return true
 			}
 			available1--
 			if available2 > 0 {
-				if successive {
+				if c.successive {
 					start[1] <- true
 				}
 				if server2 > 0 {
 					do2 <- server2
-					return &out2[server2-1], 2
+					c.route = 2
+					c.out = &out2[server2-1]
+					c.server = server2
+					return true
 				}
 			} else {
-				return nil, 0
+				return false
 			}
 		// Route 2 sends status from any server
 		case ok2 = <-try2:
@@ -268,18 +278,24 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool,
 				server2 = ok2
 				if available1 == 0 {
 					do2 <- server2
-					return &out2[server2-1], 2
+					c.route = 2
+					c.out = &out2[server2-1]
+					c.server = server2
+					return true
 				} else if !wait {
 					do2 <- server2
 					do1 <- 0
-					return &out2[server2-1], 2
+					c.route = 2
+					c.out = &out2[server2-1]
+					c.server = server2
+					return true
 				}
 			} else {
 				if ok2 == 0 {
 					available2--
 				}
 				if available2 > 0 && server2 == 0 {
-					if successive {
+					if c.successive {
 						if count2 < len(priority[1]) {
 							start[1] <- true
 						} else if count2 < len(priority[1])+len(priority[2]) {
@@ -297,7 +313,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool,
 						}
 					}
 				} else if available1 == 0 {
-					return nil, 0
+					return false
 				}
 			}
 		// Priority period for route 1 ends
@@ -308,7 +324,10 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool,
 				if available1 > 0 {
 					do1 <- 0
 				}
-				return &out2[server2-1], 2
+				c.route = 2
+				c.out = &out2[server2-1]
+				c.server = server2
+				return true
 			}
 		case <-timer2.C:
 			if available1 > 0 {
@@ -317,7 +336,7 @@ func getRoute(bufIn *bufio.Reader, conn *net.Conn, first []byte, firstFull bool,
 			if available2 > 0 {
 				do2 <- 0
 			}
-			return nil, 0
+			return false
 		}
 	}
 }
@@ -366,14 +385,13 @@ func relayLocal(bufIn *bufio.Reader, out *net.Conn, mode string, total, route, n
 	(*out).Close()
 }
 
-func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFull, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
-	timeout, total, route, server int, start chan bool, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
+func (c *connection) handleRemote(out *net.Conn, network string, timeout, route, server int, start chan bool, try, do chan int, stop2 chan bool) {
 	mu.Lock()
 	jobs[route]++
 	mu.Unlock()
 	select {
 	case <-start:
-		doRemote(bufIn, conn, out, firstOut, firstFull, ruleBased, firstReq, reqs, mode, network, dest, host, port, timeout, total, route, server, try, do, stop2, connection, tls, lastReq)
+		c.doRemote(out, network, timeout, route, server, try, do, stop2)
 	case s := <-do:
 		do <- s
 	}
@@ -382,30 +400,29 @@ func handleRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, fir
 	mu.Unlock()
 }
 
-func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFull, ruleBased bool, firstReq *http.Request, reqs chan *http.Request, mode, network, dest, host, port string,
-	timeout, total, route, server int, try, do chan int, stop2 chan bool, connection, tls bool, lastReq *time.Time) {
+func (c *connection) doRemote(out *net.Conn, network string, timeout, route, server int, try, do chan int, stop2 chan bool) {
 	var dp string
 	var err error
 	if route == 1 {
-		dp = net.JoinHostPort(dest, port)
+		dp = net.JoinHostPort(c.dest, c.dport)
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s", mode, total, route, network, dp)
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s", c.mode, c.total, route, network, dp)
 		}
 		*out, err = net.DialTimeout(network, dp, time.Second*time.Duration(timeout))
 	} else {
 		dialer, err1 := proxy.SOCKS5("tcp", socks[server-1].addr, nil, &net.Dialer{Timeout: time.Second * time.Duration(timeout)})
 		if err1 != nil {
-			logger.Printf("%s %5d: ERR         %d Failed to dial SOCKS server %s. Error: %s", mode, total, route, socks[server-1].addr, err)
+			logger.Printf("%s %5d: ERR         %d Failed to dial SOCKS server %s. Error: %s", c.mode, c.total, route, socks[server-1].addr, err)
 			try <- 0
 			return
 		}
-		if host != "" {
-			dp = net.JoinHostPort(host, port)
+		if c.host != "" {
+			dp = net.JoinHostPort(c.host, c.dport)
 		} else {
-			dp = net.JoinHostPort(dest, port)
+			dp = net.JoinHostPort(c.dest, c.dport)
 		}
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", mode, total, route, network, dp, socks[server-1].addr)
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", c.mode, c.total, route, network, dp, socks[server-1].addr)
 		}
 		*out, err = dialer.Dial(network, dp)
 	}
@@ -450,19 +467,19 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 	if err != nil {
 		if strings.Contains(err.Error(), "time") {
 			if *verbose {
-				logger.Printf("%s %5d: SYN         %d Initial connection timeout", mode, total, route)
+				logger.Printf("%s %5d: SYN         %d Initial connection timeout", c.mode, c.total, route)
 			}
 		} else if strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "reset") {
 			if *verbose {
-				logger.Printf("%s %5d: RST         %d Initial connection reset", mode, total, route)
+				logger.Printf("%s %5d: RST         %d Initial connection reset", c.mode, c.total, route)
 			}
 		} else if strings.Contains(err.Error(), "no such host") {
 			if *verbose {
-				logger.Printf("%s %5d: NXD         %d Domain lookup failed", mode, total, route)
+				logger.Printf("%s %5d: NXD         %d Domain lookup failed", c.mode, c.total, route)
 			}
 		} else {
 			if *verbose {
-				logger.Printf("%s %5d: ERR         %d Failed to dial server. Error: %s", mode, total, route, err)
+				logger.Printf("%s %5d: ERR         %d Failed to dial server. Error: %s", c.mode, c.total, route, err)
 			}
 		}
 		try <- 0
@@ -472,7 +489,7 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 		tcp.SetLinger(0)
 	}*/
 	if *verbose {
-		logger.Printf("%s %5d:  *          %d TCP connection established", mode, total, route)
+		logger.Printf("%s %5d:  *          %d TCP connection established", c.mode, c.total, route)
 	}
 	mu.Lock()
 	open[route]++
@@ -484,17 +501,11 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 		mu.Unlock()
 	}()
 
-	// Save hostname in host
-	destIsIP := net.ParseIP(dest) != nil
-	if host == "" && !destIsIP {
-		host = dest
-	}
-
-	if route == 1 && !ruleBased && *dnsOK && !destIsIP {
+	if route == 1 && !c.ruleBased && *dnsOK && !c.destIsIP {
 		// dest is hostname, match IP rules before sending first byte if DNS is ok
 		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
-			newRoute, ruleBased = matchIP(total, mode, tcpAddr.IP)
+			newRoute, c.ruleBased = matchIP(c.total, c.mode, tcpAddr.IP)
 			switch newRoute {
 			case 0:
 			case 1:
@@ -511,11 +522,11 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 	}
 
 	// Send first byte to server
-	if len(firstOut) > 0 {
+	if len(c.first) > 0 {
 		(*out).SetWriteDeadline(time.Now().Add(time.Second * time.Duration(timeout)))
-		if _, err := (*out).Write(firstOut); err != nil {
+		if _, err := (*out).Write(c.first); err != nil {
 			if *verbose {
-				logger.Printf("%s %5d: ERR         %d Failed to send first byte to server. Error: %s", mode, total, route, err)
+				logger.Printf("%s %5d: ERR         %d Failed to send first byte to server. Error: %s", c.mode, c.total, route, err)
 			}
 			try <- 0
 			return
@@ -529,13 +540,13 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 	var firstResp *http.Response
 	bufOut := bufio.NewReader(*out)
 	n := 0
-	if firstFull {
+	if c.firstIsFull {
 		(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 100))
 	} else {
 		(*out).SetReadDeadline(time.Now().Add(time.Second * time.Duration(timeout)))
 	}
-	if mode == "H" && firstReq != nil {
-		firstResp, err = http.ReadResponse(bufOut, firstReq)
+	if c.mode == "H" && c.firstReq != nil {
+		firstResp, err = http.ReadResponse(bufOut, c.firstReq)
 	} else {
 		n, err = bufOut.Read(firstIn)
 	}
@@ -544,22 +555,22 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 
 	if err != nil {
 		// If request is only partially sent, timeout is normal
-		if !firstFull || !strings.Contains(err.Error(), "time") {
+		if !c.firstIsFull || !strings.Contains(err.Error(), "time") {
 			if strings.Contains(err.Error(), "reset") {
 				if *verbose {
-					logger.Printf("%s %5d:     RST     %d First byte reset", mode, total, route)
+					logger.Printf("%s %5d:     RST     %d First byte reset", c.mode, c.total, route)
 				}
 			} else if strings.Contains(err.Error(), "time") {
 				if *verbose {
-					logger.Printf("%s %5d:     PSH     %d First byte timeout", mode, total, route)
+					logger.Printf("%s %5d:     PSH     %d First byte timeout", c.mode, c.total, route)
 				}
 			} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				if *verbose {
-					logger.Printf("%s %5d:     FIN     %d First byte from server is EOF", mode, total, route)
+					logger.Printf("%s %5d:     FIN     %d First byte from server is EOF", c.mode, c.total, route)
 				}
 			} else if !strings.Contains(err.Error(), "closed") {
 				if *verbose {
-					logger.Printf("%s %5d:     ERR     %d Connection closed before receiving first byte. Error: %s", mode, total, route, err)
+					logger.Printf("%s %5d:     ERR     %d Connection closed before receiving first byte. Error: %s", c.mode, c.total, route, err)
 				}
 			}
 			try <- 0
@@ -567,51 +578,51 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 		}
 	} else {
 		// If there is response, remove full flag
-		firstFull = false
+		c.firstIsFull = false
 		// Check response validity
-		if mode == "H" && firstReq != nil {
+		if c.mode == "H" && c.firstReq != nil {
 			if *verbose {
-				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms", total, route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
+				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms", c.total, c.route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
 			}
-			if route == 1 && !ruleBased && findRouteForText(firstResp.Status, httpRules, false) == 2 {
+			if route == 1 && !c.ruleBased && findRouteForText(firstResp.Status, httpRules, false) == 2 {
 				if *verbose {
-					logger.Printf("%s %5d:      *      %d HTTP Status in blocklist", mode, total, route)
+					logger.Printf("%s %5d:      *      %d HTTP Status in blocklist", c.mode, c.total, route)
 				}
 				try <- 0
 				return
 			}
 		} else {
 			if *verbose {
-				logger.Printf("%s %5d:      *      %d First %d bytes from server. TTFB %d ms", mode, total, route, n, ttfb.Milliseconds())
+				logger.Printf("%s %5d:      *      %d First %d bytes from server. TTFB %d ms", c.mode, c.total, route, n, ttfb.Milliseconds())
 			}
-			if firstReq != nil {
+			if c.firstReq != nil {
 				if resp, err := readResponseStatus(bufio.NewReader(bytes.NewReader(firstIn[:n]))); err == nil {
 					if *verbose {
-						logger.Printf("%s %5d:      *      %d HTTP Status %s", mode, total, route, resp.Status)
+						logger.Printf("%s %5d:      *      %d HTTP Status %s", c.mode, c.total, route, resp.Status)
 					}
-					if route == 1 && !ruleBased && findRouteForText(resp.Status, httpRules, false) == 2 {
+					if route == 1 && !c.ruleBased && findRouteForText(resp.Status, httpRules, false) == 2 {
 						if *verbose {
-							logger.Printf("%s %5d:      *      %d HTTP Status in blocklist", mode, total, route)
+							logger.Printf("%s %5d:      *      %d HTTP Status in blocklist", c.mode, c.total, route)
 						}
 						try <- 0
 						return
 					}
 				} else {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d Bad HTTP response. Error: %s", mode, total, route, err)
+						logger.Printf("%s %5d:     ERR     %d Bad HTTP response. Error: %s", c.mode, c.total, route, err)
 					}
-					if route == 1 && !ruleBased {
+					if route == 1 && !c.ruleBased {
 						try <- 0
 						return
 					}
 				}
 			}
-			if tls && n > recordHeaderLen {
+			if c.tls && n > recordHeaderLen {
 				if !(recordType(firstIn[0]) == recordTypeHandshake && firstIn[recordHeaderLen] == typeServerHello) {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake", mode, total, route)
+						logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake", c.mode, c.total, route)
 					}
-					if route == 1 && !ruleBased {
+					if route == 1 && !c.ruleBased {
 						try <- 0
 						return
 					}
@@ -621,10 +632,10 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 	}
 
 	// Match IP rules after TLS and HTTP check if DNS is not OK and hostname is available
-	if route == 1 && !ruleBased && !*dnsOK && host != "" {
+	if route == 1 && !c.ruleBased && !*dnsOK && c.host != "" {
 		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
-			newRoute, ruleBased = matchIP(total, mode, tcpAddr.IP)
+			newRoute, c.ruleBased = matchIP(c.total, c.mode, tcpAddr.IP)
 			switch newRoute {
 			case 0:
 			case 1:
@@ -647,15 +658,15 @@ func doRemote(bufIn *bufio.Reader, conn, out *net.Conn, firstOut []byte, firstFu
 	if doServer == server {
 		// Drain channel so that sender will not block
 		defer func() {
-			for len(reqs) > 0 {
-				<-reqs
+			for len(c.reqs) > 0 {
+				<-c.reqs
 			}
 		}()
 		// Set last request time to sent time before writeing response to client
 		// Do not set initially at client side as it's racy
-		*lastReq = sentTime
+		c.lastReq = sentTime
 		if *verbose {
-			logger.Printf("%s %5d:      *      %d Continue %s %s -> %s", mode, total, route, (*out).LocalAddr().Network(), (*out).LocalAddr(), (*out).RemoteAddr())
+			logger.Printf("%s %5d:      *      %d Continue %s %s -> %s", c.mode, c.total, route, (*out).LocalAddr().Network(), (*out).LocalAddr(), (*out).RemoteAddr())
 		}
 		if mode == "H" && firstReq != nil {
 			var totalBytes, accum int64
@@ -895,7 +906,7 @@ func matchHost(total int, mode, host string) (route int, ruleBased bool) {
 		route = findRouteForText(host, hostRules, true)
 		if route != 0 {
 			if *verbose {
-				logger.Printf("%s %5d: SET           Host rule matched for %s. Select route %d", mode, total, host, route)
+				logger.Printf("%s %5d: RLE           Host rule matched for %s. Select route %d", mode, total, host, route)
 			}
 			ruleBased = true
 			return
@@ -926,7 +937,7 @@ func matchIP(total int, mode string, ip net.IP) (route int, ruleBased bool) {
 		}
 		if route != 0 {
 			if *verbose {
-				logger.Printf("%s %5d: SET           IP rule matched for %s. Select route %d", mode, total, ip, route)
+				logger.Printf("%s %5d: RLE           IP rule matched for %s. Select route %d", mode, total, ip, route)
 			}
 			ruleBased = true
 			return
@@ -935,14 +946,14 @@ func matchIP(total int, mode string, ip net.IP) (route int, ruleBased bool) {
 	if blockedIPSet.contain(ip) {
 		route = 2
 		if *verbose {
-			logger.Printf("%s %5d: SET           IP %s found in blocked list. Select route %d", mode, total, ip, route)
+			logger.Printf("%s %5d: LST           IP %s found in blocked list. Select route %d", mode, total, ip, route)
 		}
 		return
 	}
 	if slowIPSet.contain(ip) {
 		route = 2
 		if *verbose {
-			logger.Printf("%s %5d: SET           IP %s found in slow list. Select route %d", mode, total, ip, route)
+			logger.Printf("%s %5d: LST           IP %s found in slow list. Select route %d", mode, total, ip, route)
 		}
 		return
 	}

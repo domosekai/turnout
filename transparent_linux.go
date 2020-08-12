@@ -44,7 +44,9 @@ func doTransparent(total *int) {
 		log.Fatal(err)
 	}
 	for {
-		conn, err := listener.Accept()
+		var conn connection
+		var err error
+		conn.in, err = listener.Accept()
 		if err != nil {
 			logger.Printf("Listener failed to accept new connection. Error: %s", err)
 			continue
@@ -53,7 +55,8 @@ func doTransparent(total *int) {
 		*total++
 		open[0]++
 		mu.Unlock()
-		go handleLocal(conn, *total)
+		conn.total = *total
+		go conn.handleLocal()
 	}
 }
 
@@ -70,22 +73,22 @@ func isLocalAddr(addr string) bool {
 	return false
 }
 
-func handleLocal(conn net.Conn, total int) {
+func (c *connection) handleLocal() {
 	defer func() {
-		conn.Close()
+		c.in.Close()
 		mu.Lock()
 		open[0]--
 		mu.Unlock()
 	}()
 
 	// Get original destination
-	var network, dest string
-	network = conn.LocalAddr().Network()
+	var dest string
+	c.network = c.in.LocalAddr().Network()
 	if *tproxy {
-		dest = conn.LocalAddr().String()
+		dest = c.in.LocalAddr().String()
 	}
 	if dest == "" || isLocalAddr(dest) {
-		if tcp, ok := conn.(*net.TCPConn); ok {
+		if tcp, ok := c.in.(*net.TCPConn); ok {
 			var err error
 			if dest, err = getOriginalDst(tcp); err != nil {
 				logger.Printf("Failed to get original destination in redirect mode. Error: %s", err)
@@ -100,8 +103,11 @@ func handleLocal(conn net.Conn, total int) {
 		}
 	}
 	if *verbose {
-		logger.Printf("T %5d:  *            New %s %s -> %s", total, network, conn.RemoteAddr(), dest)
+		logger.Printf("T %5d:  *            New %s %s -> %s", c.total, c.network, c.in.RemoteAddr(), dest)
 	}
-	host, port, _ := net.SplitHostPort(dest)
-	handleFirstByte(bufio.NewReader(conn), &conn, "T", network, host, port, true, total)
+	c.dest, c.dport, _ = net.SplitHostPort(dest)
+	c.bufIn = bufio.NewReader(c.in)
+	c.mode = "T"
+	c.sniff = true
+	c.handleFirstByte()
 }

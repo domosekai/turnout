@@ -6,10 +6,12 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"runtime"
 	"sort"
@@ -46,6 +48,29 @@ var verbose = flag.Bool("verbose", false, "Verbose logging")
 var httpBadStatus = flag.String("badhttp", "", "Drop specified (non-TLS) HTTP response from route 1 (e.g. 403,404,5*)")
 var version = "unknown"
 var builddate = "unknown"
+
+type connection struct {
+	source, dest    string
+	sport, dport    string
+	host            string
+	destIsIP        bool
+	bufIn, bufOut   *bufio.Reader
+	in              net.Conn
+	out             *net.Conn
+	sniff           bool
+	successive      bool
+	first           []byte
+	firstIsFull     bool
+	ruleBased       bool
+	firstReq        *http.Request
+	reqs            chan *http.Request
+	mode, network   string
+	total           int
+	timeout         int
+	route, server   int
+	connection, tls bool
+	lastReq         time.Time
+}
 
 type server struct {
 	addr string
