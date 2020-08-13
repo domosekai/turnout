@@ -184,14 +184,30 @@ func (c *connection) getRoute() bool {
 			route, c.ruleBased = matchHost(c.total, c.mode, c.dest)
 		}
 	}
-	// Route 1 has only one server, skip lookup
-	if route != 1 && !*fastRoute {
-		if r, s, m := rt.get(c.dest, c.host); m && (r == route || route == 0) {
-			route = r
-			server = s
-			if *verbose {
-				logger.Printf("%s %5d: EXT           Connections to %s %s exist. Select route %d server %d", c.mode, c.total, c.host, c.dest, route, server)
+	if route < 0 || route > 2 {
+		return false
+	}
+
+	// Follow existing routes
+	var newEntry *routeEntry
+	var existed bool
+	if !*fastRoute {
+		if r, s, m, n := rt.addOrNew(c.dest, c.host); m {
+			// How to deal with route change?
+			if r == route || route == 0 {
+				route = r
+				server = s
+				if *verbose {
+					if c.host != "" {
+						logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", c.mode, c.total, c.host, route, server)
+					} else {
+						logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", c.mode, c.total, c.dest, route, server)
+					}
+				}
 			}
+			existed = true
+		} else {
+			newEntry = n
 		}
 	}
 
@@ -264,8 +280,9 @@ func (c *connection) getRoute() bool {
 		// Route 1 sends status, bad2 is set by this time
 		case ok1 = <-try1:
 			if ok1 > 0 {
-				if !*fastRoute {
-					rt.add(c.dest, c.host, 1, 1)
+				if newEntry != nil {
+					logger.Printf("%s %5d:      *        To save to new route 1 %s %s", c.mode, c.total, c.dest, c.host)
+					newEntry.saveNew(1, 1)
 				}
 				do1 <- 1
 				if available2 > 0 {
@@ -281,8 +298,8 @@ func (c *connection) getRoute() bool {
 					start[1] <- true
 				}
 				if server2 > 0 {
-					if !*fastRoute {
-						rt.add(c.dest, c.host, 2, server2)
+					if newEntry != nil {
+						newEntry.saveNew(2, server2)
 					}
 					do2 <- server2
 					c.route = 2
@@ -291,6 +308,14 @@ func (c *connection) getRoute() bool {
 					return true
 				}
 			} else {
+				if newEntry != nil {
+					logger.Printf("%s %5d:      *        To unlock new route %s %s", c.mode, c.total, c.dest, c.host)
+					rt.unlockAndDel(c.dest, c.host, newEntry)
+				}
+				if existed {
+					logger.Printf("%s %5d:      *        To decrease failed route %s %s", c.mode, c.total, c.dest, c.host)
+					rt.del(c.dest, c.host, false)
+				}
 				return false
 			}
 		// Route 2 sends status from any server
@@ -299,8 +324,9 @@ func (c *connection) getRoute() bool {
 			if ok2 > 0 && available2 > 0 && server2 == 0 {
 				server2 = ok2
 				if available1 == 0 {
-					if !*fastRoute {
-						rt.add(c.dest, c.host, 2, server2)
+					if newEntry != nil {
+						logger.Printf("%s %5d:      *        To save to new route 2 %s %s", c.mode, c.total, c.dest, c.host)
+						newEntry.saveNew(2, server2)
 					}
 					do2 <- server2
 					c.route = 2
@@ -308,8 +334,9 @@ func (c *connection) getRoute() bool {
 					c.server = server2
 					return true
 				} else if !wait {
-					if !*fastRoute {
-						rt.add(c.dest, c.host, 2, server2)
+					if newEntry != nil {
+						logger.Printf("%s %5d:      *        To save to new route 2 %s %s", c.mode, c.total, c.dest, c.host)
+						newEntry.saveNew(2, server2)
 					}
 					do2 <- server2
 					do1 <- 0
@@ -341,6 +368,14 @@ func (c *connection) getRoute() bool {
 						}
 					}
 				} else if available1 == 0 {
+					if newEntry != nil {
+						logger.Printf("%s %5d:      *        To unlock new route %s %s", c.mode, c.total, c.dest, c.host)
+						rt.unlockAndDel(c.dest, c.host, newEntry)
+					}
+					if existed {
+						logger.Printf("%s %5d:      *        To decrease failed route %s %s", c.mode, c.total, c.dest, c.host)
+						rt.del(c.dest, c.host, false)
+					}
 					return false
 				}
 			}
@@ -348,8 +383,9 @@ func (c *connection) getRoute() bool {
 		case <-timer1.C:
 			wait = false
 			if server2 > 0 && available2 > 0 {
-				if !*fastRoute {
-					rt.add(c.dest, c.host, 2, server2)
+				if newEntry != nil {
+					logger.Printf("%s %5d:      *        To save to new route 2 %s %s", c.mode, c.total, c.dest, c.host)
+					newEntry.saveNew(2, server2)
 				}
 				do2 <- server2
 				if available1 > 0 {
@@ -366,6 +402,14 @@ func (c *connection) getRoute() bool {
 			}
 			if available2 > 0 {
 				do2 <- 0
+			}
+			if newEntry != nil {
+				logger.Printf("%s %5d:      *        To unlock new route %s %s", c.mode, c.total, c.dest, c.host)
+				rt.unlockAndDel(c.dest, c.host, newEntry)
+			}
+			if existed {
+				logger.Printf("%s %5d:      *        To decrease failed route %s %s", c.mode, c.total, c.dest, c.host)
+				rt.del(c.dest, c.host, false)
 			}
 			return false
 		}
@@ -689,11 +733,12 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 	if doServer == server {
 		// Drain channel so that sender will not block
 		defer func() {
-			if !*fastRoute {
-				rt.del(c.dest, c.host)
-			}
 			for len(c.reqs) > 0 {
 				<-c.reqs
+			}
+			logger.Printf("%s %5d:      *      %d To delete route %s %s", c.mode, c.total, route, c.dest, c.host)
+			if !*fastRoute {
+				rt.del(c.dest, c.host, false)
 			}
 		}()
 		// Set last request time to sent time before writeing response to client

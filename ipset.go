@@ -33,11 +33,12 @@ type routeEntry struct {
 	route  int
 	server int
 	count  int
+	mu     sync.Mutex
 }
 
 type routingTable struct {
 	table map[string]*routeEntry
-	rw    sync.RWMutex
+	mu    sync.Mutex // for adding / removing entries only, use entry-level locks to edit entries
 }
 
 func (set *ipSet) add(ip net.IP) {
@@ -84,58 +85,82 @@ func (set *hostSet) contain(host string) bool {
 	return false
 }
 
-func (t *routingTable) add(dest, host string, route, server int) {
-	var key string
-	if host != "" {
-		key = host
-	} else {
-		key = dest
-	}
-	t.rw.Lock()
-	if entry := t.table[key]; entry != nil {
-		// update route and server to latest
-		entry.route = route
-		entry.server = server
-		entry.count++
-	} else {
-		t.table[key] = &routeEntry{
-			route:  route,
-			server: server,
-			count:  1,
-		}
-	}
-	t.rw.Unlock()
+func (e *routeEntry) saveNew(route, server int) {
+	e.route = route
+	e.server = server
+	e.count = 1
+	e.mu.Unlock()
 }
 
-func (t *routingTable) del(dest, host string) {
+func (t *routingTable) del(dest, host string, delay bool) {
 	var key string
 	if host != "" {
 		key = host
 	} else {
 		key = dest
 	}
-	t.rw.Lock()
-	if entry := t.table[key]; entry != nil && entry.count > 1 {
-		entry.count--
-	} else {
+	if delay {
+		time.Sleep(time.Second * 10)
+	}
+	t.mu.Lock()
+	entry := t.table[key]
+	if entry == nil {
+		logger.Printf("Error: entry is nil for %s %s", dest, host)
+		t.mu.Unlock()
+		return
+	}
+	entry.mu.Lock()
+	// Always minus 1 so that other process can know the entry obtained is zombie
+	entry.count--
+	if entry.count == 0 {
 		delete(t.table, key)
 	}
-	t.rw.Unlock()
+	entry.mu.Unlock()
+	t.mu.Unlock()
 }
 
-func (t *routingTable) get(dest, host string) (route, server int, matched bool) {
+func (t *routingTable) addOrNew(dest, host string) (route, server int, matched bool, newEntry *routeEntry) {
 	var key string
 	if host != "" {
 		key = host
 	} else {
 		key = dest
 	}
-	t.rw.RLock()
-	if entry := t.table[key]; entry != nil && entry.count > 0 {
+	t.mu.Lock()
+	var entry *routeEntry
+	if entry = t.table[key]; entry == nil {
+		// Lock new entry until route is confirmed, releasing table lock
+		newEntry = new(routeEntry)
+		newEntry.mu.Lock()
+		t.table[key] = newEntry
+		t.mu.Unlock()
+	} else {
+		t.mu.Unlock()
+		entry.mu.Lock()
+		if entry.count == 0 {
+			// zombie entry
+			entry.mu.Unlock()
+			return t.addOrNew(dest, host)
+		}
+		entry.count++
+		logger.Printf("Now route %s %s incresed to %d", dest, host, entry.count)
 		route = entry.route
 		server = entry.server
+		entry.mu.Unlock()
 		matched = true
 	}
-	t.rw.RUnlock()
 	return
+}
+
+func (t *routingTable) unlockAndDel(dest, host string, newEntry *routeEntry) {
+	var key string
+	if host != "" {
+		key = host
+	} else {
+		key = dest
+	}
+	t.mu.Lock()
+	delete(t.table, key)
+	newEntry.mu.Unlock()
+	t.mu.Unlock()
 }
