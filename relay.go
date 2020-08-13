@@ -193,7 +193,6 @@ func (c *connection) getRoute() bool {
 	var existed bool
 	if !*fastRoute {
 		if r, s, m, n := rt.addOrNew(c.dest, c.host); m {
-			// How to deal with route change?
 			if r == route || route == 0 {
 				route = r
 				server = s
@@ -257,8 +256,6 @@ func (c *connection) getRoute() bool {
 		} else {
 			start[1] <- true
 		}
-	default:
-		return false
 	}
 
 	// Wait for first byte from server
@@ -299,6 +296,7 @@ func (c *connection) getRoute() bool {
 				}
 				if server2 > 0 {
 					if newEntry != nil {
+						logger.Printf("%s %5d:      *        To save to new route 2 %s %s", c.mode, c.total, c.dest, c.host)
 						newEntry.saveNew(2, server2)
 					}
 					do2 <- server2
@@ -314,7 +312,7 @@ func (c *connection) getRoute() bool {
 				}
 				if existed {
 					logger.Printf("%s %5d:      *        To decrease failed route %s %s", c.mode, c.total, c.dest, c.host)
-					rt.del(c.dest, c.host, false)
+					rt.del(c.dest, c.host, false, c.total)
 				}
 				return false
 			}
@@ -374,7 +372,7 @@ func (c *connection) getRoute() bool {
 					}
 					if existed {
 						logger.Printf("%s %5d:      *        To decrease failed route %s %s", c.mode, c.total, c.dest, c.host)
-						rt.del(c.dest, c.host, false)
+						rt.del(c.dest, c.host, false, c.total)
 					}
 					return false
 				}
@@ -409,7 +407,7 @@ func (c *connection) getRoute() bool {
 			}
 			if existed {
 				logger.Printf("%s %5d:      *        To decrease failed route %s %s", c.mode, c.total, c.dest, c.host)
-				rt.del(c.dest, c.host, false)
+				rt.del(c.dest, c.host, false, c.total)
 			}
 			return false
 		}
@@ -738,7 +736,7 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 			}
 			logger.Printf("%s %5d:      *      %d To delete route %s %s", c.mode, c.total, route, c.dest, c.host)
 			if !*fastRoute {
-				rt.del(c.dest, c.host, false)
+				rt.del(c.dest, c.host, false, c.total)
 			}
 		}()
 		// Set last request time to sent time before writeing response to client

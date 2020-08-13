@@ -92,7 +92,7 @@ func (e *routeEntry) saveNew(route, server int) {
 	e.mu.Unlock()
 }
 
-func (t *routingTable) del(dest, host string, delay bool) {
+func (t *routingTable) del(dest, host string, delay bool, total int) {
 	var key string
 	if host != "" {
 		key = host
@@ -105,7 +105,7 @@ func (t *routingTable) del(dest, host string, delay bool) {
 	t.mu.Lock()
 	entry := t.table[key]
 	if entry == nil {
-		logger.Printf("Error: entry is nil for %s %s", dest, host)
+		logger.Printf("%d: Error: entry is nil for %s %s", total, dest, host)
 		t.mu.Unlock()
 		return
 	}
@@ -126,28 +126,31 @@ func (t *routingTable) addOrNew(dest, host string) (route, server int, matched b
 	} else {
 		key = dest
 	}
-	t.mu.Lock()
-	var entry *routeEntry
-	if entry = t.table[key]; entry == nil {
-		// Lock new entry until route is confirmed, releasing table lock
-		newEntry = new(routeEntry)
-		newEntry.mu.Lock()
-		t.table[key] = newEntry
-		t.mu.Unlock()
-	} else {
-		t.mu.Unlock()
-		entry.mu.Lock()
-		if entry.count == 0 {
-			// zombie entry
+	for {
+		t.mu.Lock()
+		if entry := t.table[key]; entry == nil {
+			// Lock new entry until route is confirmed, releasing table lock
+			newEntry = new(routeEntry)
+			newEntry.mu.Lock()
+			t.table[key] = newEntry
+			t.mu.Unlock()
+			return
+		} else {
+			t.mu.Unlock()
+			entry.mu.Lock()
+			if entry.count == 0 {
+				// zombie entry
+				entry.mu.Unlock()
+				continue
+			}
+			entry.count++
+			logger.Printf("Route %s %s increased to %d", dest, host, entry.count)
+			route = entry.route
+			server = entry.server
 			entry.mu.Unlock()
-			return t.addOrNew(dest, host)
+			matched = true
+			return
 		}
-		entry.count++
-		logger.Printf("Now route %s %s incresed to %d", dest, host, entry.count)
-		route = entry.route
-		server = entry.server
-		entry.mu.Unlock()
-		matched = true
 	}
 	return
 }
