@@ -99,16 +99,12 @@ func (t *routingTable) del(dest, host string, delay bool, total int) {
 	} else {
 		key = dest
 	}
+	// Suppose usual reconnect interval is 5 seconds, then the delay should be less
 	if delay {
-		time.Sleep(time.Second * 10)
+		time.Sleep(time.Second * 3)
 	}
 	t.mu.Lock()
 	entry := t.table[key]
-	if entry == nil {
-		logger.Printf("%d: Error: entry is nil for %s %s", total, dest, host)
-		t.mu.Unlock()
-		return
-	}
 	entry.mu.Lock()
 	// Always minus 1 so that other process can know the entry obtained is zombie
 	entry.count--
@@ -144,7 +140,6 @@ func (t *routingTable) addOrNew(dest, host string) (route, server int, matched b
 				continue
 			}
 			entry.count++
-			logger.Printf("Route %s %s increased to %d", dest, host, entry.count)
 			route = entry.route
 			server = entry.server
 			entry.mu.Unlock()
@@ -152,7 +147,6 @@ func (t *routingTable) addOrNew(dest, host string) (route, server int, matched b
 			return
 		}
 	}
-	return
 }
 
 func (t *routingTable) unlockAndDel(dest, host string, newEntry *routeEntry) {

@@ -50,19 +50,22 @@ var httpBadStatus = flag.String("badhttp", "", "Drop specified (non-TLS) HTTP re
 var version = "unknown"
 var builddate = "unknown"
 
-type connection struct {
+type localConn struct {
 	source, dest  string
 	sport, dport  string
 	host          string
-	in            net.Conn
-	out           *net.Conn
-	bufIn         *bufio.Reader
+	conn          net.Conn
+	buf           *bufio.Reader
 	mode, network string
+	total         int
+}
+
+type remoteConn struct {
+	conn          *net.Conn
 	first         []byte
 	firstIsFull   bool
-	currentReq    *http.Request
+	firstReq      *http.Request
 	reqs          chan *http.Request
-	total         int
 	route, server int
 	ruleBased     bool
 	hasConnection bool

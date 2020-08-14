@@ -35,53 +35,47 @@ var (
 	slowHostSet    hostSet
 )
 
-// Wait for first byte from client, should come immediately with ACK in the 3-way handshake
-// Otherwise it may never come (like FTP)
-func (c *connection) getFirstByte() {
+// Wait for first byte from client, should usually come immediately with ACK in the 3-way handshake, or never come (FTP)
+func (lo *localConn) getFirstByte() {
 	// git on WSL may send first byte with more than 1s delay
-	c.in.SetReadDeadline(time.Now().Add(time.Second * 3))
+	lo.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
 	first := make([]byte, initialSize)
-	n, err := c.bufIn.Read(first)
+	n, err := lo.buf.Read(first)
 	if err == nil {
 		if *verbose {
-			logger.Printf("%s %5d:  *            First %d bytes from client", c.mode, c.total, n)
+			logger.Printf("%s %5d:  *            First %d bytes from client", lo.mode, lo.total, n)
 		}
 	} else if !strings.Contains(err.Error(), "time") {
 		if *verbose {
-			logger.Printf("%s %5d:  *            Failed to read first byte from client. Error: %s", c.mode, c.total, err)
+			logger.Printf("%s %5d:  *            Failed to read first byte from client. Error: %s", lo.mode, lo.total, err)
 		}
 		return
 	}
-	c.in.SetReadDeadline(time.Time{})
+	lo.conn.SetReadDeadline(time.Time{})
+
+	// Prepare remote connection
+	var re remoteConn
 
 	// TLS Client Hello
 	if n > recordHeaderLen && recordType(first[0]) == recordTypeHandshake && first[recordHeaderLen] == typeClientHello {
 		if m := new(clientHelloMsg); m.unmarshal(first[recordHeaderLen:n]) {
 			if m.serverName != "" {
 				if *verbose {
-					logger.Printf("%s %5d:  *            TLS SNI %s", c.mode, c.total, m.serverName)
+					logger.Printf("%s %5d:  *            TLS SNI %s", lo.mode, lo.total, m.serverName)
 				}
-				if c.mode == "T" {
-					c.host, _ = normalizeHostname(m.serverName, c.dport)
+				if lo.mode == "T" {
+					lo.host, _ = normalizeHostname(m.serverName, lo.dport)
 				}
 			} else if m.esni {
 				if *verbose {
-					logger.Printf("%s %5d:  *            TLS ESNI", c.mode, c.total)
+					logger.Printf("%s %5d:  *            TLS ESNI", lo.mode, lo.total)
 				}
 			} else {
 				if *verbose {
-					logger.Printf("%s %5d:  *            TLS Client Hello", c.mode, c.total)
+					logger.Printf("%s %5d:  *            TLS Client Hello", lo.mode, lo.total)
 				}
 			}
-			c.first = first[:n]
-			c.firstIsFull = n == initialSize
-			c.tls = true
-			if c.getRoute() {
-				c.relayLocal()
-			} else {
-				logger.Printf("%s %5d: ERR           No route found for %s %s:%s", c.mode, c.total, c.host, c.dest, c.dport)
-			}
-			return
+			re.tls = true
 		}
 	}
 
@@ -89,33 +83,25 @@ func (c *connection) getFirstByte() {
 	if n > 0 {
 		if req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(first[:n]))); err == nil {
 			if *verbose {
-				logger.Printf("%s %5d:  *            HTTP %s Host %s Content-length %d", c.mode, c.total, req.Method, req.Host, req.ContentLength)
+				logger.Printf("%s %5d:  *            HTTP %s Host %s Content-length %d", lo.mode, lo.total, req.Method, req.Host, req.ContentLength)
 			}
-			if c.mode == "T" {
-				c.host, _ = normalizeHostname(req.Host, c.dport)
+			if lo.mode == "T" {
+				lo.host, _ = normalizeHostname(req.Host, lo.dport)
 			}
-			c.first = first[:n]
-			c.firstIsFull = n == initialSize
-			c.currentReq = req
-			if c.getRoute() {
-				c.relayLocal()
-			} else {
-				logger.Printf("%s %5d: ERR           No route found for %s %s:%s", c.mode, c.total, c.host, c.dest, c.dport)
-			}
-			return
+			re.firstReq = req
 		}
 	}
 
-	// Unknown protocol
-	c.first = first[:n]
-	c.firstIsFull = n == initialSize
-	if c.getRoute() {
-		c.relayLocal()
+	// All types
+	re.first = first[:n]
+	re.firstIsFull = n == initialSize
+	if re.getRouteFor(*lo) {
+		re.relayLocalFor(*lo)
 	} else if n > 0 {
-		logger.Printf("%s %5d: ERR           No route found for %s:%s", c.mode, c.total, c.dest, c.dport)
+		logger.Printf("%s %5d: ERR           No route found for %s %s:%s", lo.mode, lo.total, lo.host, lo.dest, lo.dport)
 	} else {
 		if *verbose {
-			logger.Printf("%s %5d: ERR           No response from %s:%s", c.mode, c.total, c.dest, c.dport)
+			logger.Printf("%s %5d: ERR           No response from %s:%s", lo.mode, lo.total, lo.dest, lo.dport)
 		}
 	}
 
@@ -136,7 +122,7 @@ func normalizeHostname(host, defaultPort string) (string, string) {
 	return h, defaultPort
 }
 
-func (c *connection) getRoute() bool {
+func (re *remoteConn) getRouteFor(lo localConn) bool {
 	mu.Lock()
 	jobs[0]++
 	mu.Unlock()
@@ -160,28 +146,28 @@ func (c *connection) getRoute() bool {
 	var available1, available2 int
 
 	// dest can be IP or hostname, while host should contain hostname only
-	if net.ParseIP(c.host) != nil {
-		c.host = ""
+	if net.ParseIP(lo.host) != nil {
+		lo.host = ""
 	}
-	if c.host == "" && net.ParseIP(c.dest) == nil {
-		c.host = c.dest
+	if lo.host == "" && net.ParseIP(lo.dest) == nil {
+		lo.host = lo.dest
 	}
 
 	// Match rules
 	var route int
 	var server int
-	if c.host != "" {
-		route, c.ruleBased = matchHost(c.total, c.mode, c.host)
+	if lo.host != "" {
+		route, re.ruleBased = matchHost(lo.total, lo.mode, lo.host)
 	}
 	if route == 0 {
-		if ip := net.ParseIP(c.dest); ip != nil {
+		if ip := net.ParseIP(lo.dest); ip != nil {
 			// dest is IP, match IP rules if dns is ok or hostname is not sniffed
-			if *dnsOK || c.host == "" {
-				route, c.ruleBased = matchIP(c.total, c.mode, ip)
+			if *dnsOK || lo.host == "" {
+				route, re.ruleBased = matchIP(lo.total, lo.mode, ip)
 			}
 		} else {
 			// dest is hostname
-			route, c.ruleBased = matchHost(c.total, c.mode, c.dest)
+			route, re.ruleBased = matchHost(lo.total, lo.mode, lo.dest)
 		}
 	}
 	if route < 0 || route > 2 {
@@ -192,15 +178,15 @@ func (c *connection) getRoute() bool {
 	var newEntry *routeEntry
 	var existed bool
 	if !*fastRoute {
-		if r, s, m, n := rt.addOrNew(c.dest, c.host); m {
+		if r, s, m, n := rt.addOrNew(lo.dest, lo.host); m {
 			if r == route || route == 0 {
 				route = r
 				server = s
 				if *verbose {
-					if c.host != "" {
-						logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", c.mode, c.total, c.host, route, server)
+					if lo.host != "" {
+						logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.host, route, server)
 					} else {
-						logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", c.mode, c.total, c.dest, route, server)
+						logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.dest, route, server)
 					}
 				}
 			}
@@ -211,33 +197,33 @@ func (c *connection) getRoute() bool {
 	}
 
 	// Dispatch workers
-	net1 := c.network
-	net2 := c.network
+	net1 := lo.network
+	net2 := lo.network
 	if *force4 {
 		net1 = "tcp4"
 	}
 	totalTimeout := 1
 	if route == 0 || route == 1 {
-		go c.handleRemote(&out1, net1, int(*r1Timeout), 1, 1, start[0], try1, do1, stop2)
+		go re.handleRemote(lo, &out1, net1, int(*r1Timeout), 1, 1, start[0], try1, do1, stop2)
 		totalTimeout += int(*r1Timeout)
 		available1 = 1
 	}
 	if route == 0 || route == 2 {
 		if server == 0 {
 			for i, v := range socks {
-				go c.handleRemote(&out2[i], net2, int(*r2Timeout), 2, i+1, start[v.pri], try2, do2, stop2)
+				go re.handleRemote(lo, &out2[i], net2, int(*r2Timeout), 2, i+1, start[v.pri], try2, do2, stop2)
 				totalTimeout += int(*r2Timeout)
 			}
 			available2 = len(socks)
 		} else {
-			go c.handleRemote(&out2[server-1], net2, int(*r2Timeout), 2, server, start[1], try2, do2, stop2)
+			go re.handleRemote(lo, &out2[server-1], net2, int(*r2Timeout), 2, server, start[1], try2, do2, stop2)
 			totalTimeout += int(*r2Timeout)
 			available2 = 1
 		}
 	}
 
 	// Send signal to workers
-	successive := !c.tls
+	successive := !re.tls
 	switch route {
 	case 0:
 		start[0] <- true
@@ -278,15 +264,17 @@ func (c *connection) getRoute() bool {
 		case ok1 = <-try1:
 			if ok1 > 0 {
 				if newEntry != nil {
-					logger.Printf("%s %5d:      *        To save to new route 1 %s %s", c.mode, c.total, c.dest, c.host)
+					if *verbose {
+						logger.Printf("%s %5d:      *        Save new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+					}
 					newEntry.saveNew(1, 1)
 				}
 				do1 <- 1
 				if available2 > 0 {
 					do2 <- 0
 				}
-				c.route = 1
-				c.out = &out1
+				re.route = 1
+				re.conn = &out1
 				return true
 			}
 			available1--
@@ -296,23 +284,29 @@ func (c *connection) getRoute() bool {
 				}
 				if server2 > 0 {
 					if newEntry != nil {
-						logger.Printf("%s %5d:      *        To save to new route 2 %s %s", c.mode, c.total, c.dest, c.host)
+						if *verbose {
+							logger.Printf("%s %5d:      *        Save new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+						}
 						newEntry.saveNew(2, server2)
 					}
 					do2 <- server2
-					c.route = 2
-					c.out = &out2[server2-1]
-					c.server = server2
+					re.route = 2
+					re.conn = &out2[server2-1]
+					re.server = server2
 					return true
 				}
 			} else {
 				if newEntry != nil {
-					logger.Printf("%s %5d:      *        To unlock new route %s %s", c.mode, c.total, c.dest, c.host)
-					rt.unlockAndDel(c.dest, c.host, newEntry)
+					if *verbose {
+						logger.Printf("%s %5d:      *        Delete new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+					}
+					rt.unlockAndDel(lo.dest, lo.host, newEntry)
 				}
 				if existed {
-					logger.Printf("%s %5d:      *        To decrease failed route %s %s", c.mode, c.total, c.dest, c.host)
-					rt.del(c.dest, c.host, false, c.total)
+					if *verbose {
+						logger.Printf("%s %5d:      *        Delete existing route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+					}
+					rt.del(lo.dest, lo.host, false, lo.total)
 				}
 				return false
 			}
@@ -323,24 +317,28 @@ func (c *connection) getRoute() bool {
 				server2 = ok2
 				if available1 == 0 {
 					if newEntry != nil {
-						logger.Printf("%s %5d:      *        To save to new route 2 %s %s", c.mode, c.total, c.dest, c.host)
+						if *verbose {
+							logger.Printf("%s %5d:      *        Save new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+						}
 						newEntry.saveNew(2, server2)
 					}
 					do2 <- server2
-					c.route = 2
-					c.out = &out2[server2-1]
-					c.server = server2
+					re.route = 2
+					re.conn = &out2[server2-1]
+					re.server = server2
 					return true
 				} else if !wait {
 					if newEntry != nil {
-						logger.Printf("%s %5d:      *        To save to new route 2 %s %s", c.mode, c.total, c.dest, c.host)
+						if *verbose {
+							logger.Printf("%s %5d:      *        Save new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+						}
 						newEntry.saveNew(2, server2)
 					}
 					do2 <- server2
 					do1 <- 0
-					c.route = 2
-					c.out = &out2[server2-1]
-					c.server = server2
+					re.route = 2
+					re.conn = &out2[server2-1]
+					re.server = server2
 					return true
 				}
 			} else {
@@ -367,12 +365,16 @@ func (c *connection) getRoute() bool {
 					}
 				} else if available1 == 0 {
 					if newEntry != nil {
-						logger.Printf("%s %5d:      *        To unlock new route %s %s", c.mode, c.total, c.dest, c.host)
-						rt.unlockAndDel(c.dest, c.host, newEntry)
+						if *verbose {
+							logger.Printf("%s %5d:      *        Delete new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+						}
+						rt.unlockAndDel(lo.dest, lo.host, newEntry)
 					}
 					if existed {
-						logger.Printf("%s %5d:      *        To decrease failed route %s %s", c.mode, c.total, c.dest, c.host)
-						rt.del(c.dest, c.host, false, c.total)
+						if *verbose {
+							logger.Printf("%s %5d:      *        Delete existing route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+						}
+						rt.del(lo.dest, lo.host, false, lo.total)
 					}
 					return false
 				}
@@ -382,16 +384,18 @@ func (c *connection) getRoute() bool {
 			wait = false
 			if server2 > 0 && available2 > 0 {
 				if newEntry != nil {
-					logger.Printf("%s %5d:      *        To save to new route 2 %s %s", c.mode, c.total, c.dest, c.host)
+					if *verbose {
+						logger.Printf("%s %5d:      *        Save new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+					}
 					newEntry.saveNew(2, server2)
 				}
 				do2 <- server2
 				if available1 > 0 {
 					do1 <- 0
 				}
-				c.route = 2
-				c.out = &out2[server2-1]
-				c.server = server2
+				re.route = 2
+				re.conn = &out2[server2-1]
+				re.server = server2
 				return true
 			}
 		case <-timer2.C:
@@ -402,69 +406,73 @@ func (c *connection) getRoute() bool {
 				do2 <- 0
 			}
 			if newEntry != nil {
-				logger.Printf("%s %5d:      *        To unlock new route %s %s", c.mode, c.total, c.dest, c.host)
-				rt.unlockAndDel(c.dest, c.host, newEntry)
+				if *verbose {
+					logger.Printf("%s %5d:      *        Delete new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+				}
+				rt.unlockAndDel(lo.dest, lo.host, newEntry)
 			}
 			if existed {
-				logger.Printf("%s %5d:      *        To decrease failed route %s %s", c.mode, c.total, c.dest, c.host)
-				rt.del(c.dest, c.host, false, c.total)
+				if *verbose {
+					logger.Printf("%s %5d:      *        Delete existing route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+				}
+				rt.del(lo.dest, lo.host, false, lo.total)
 			}
 			return false
 		}
 	}
 }
 
-func (c *connection) relayLocal() {
-	totalBytes := int64(len(c.first))
+func (re *remoteConn) relayLocalFor(lo localConn) {
+	totalBytes := int64(len(re.first))
 	var err error
-	if c.route == 1 && *slowSpeed > 0 {
+	if re.route == 1 && *slowSpeed > 0 {
 		for {
 			p := make([]byte, bufferSize)
 			var bytes int
-			bytes, err = c.bufIn.Read(p)
+			bytes, err = lo.buf.Read(p)
 			if err == nil {
-				bytes, err = (*c.out).Write(p[:bytes])
+				bytes, err = (*re.conn).Write(p[:bytes])
 			} else {
-				bytes, _ = (*c.out).Write(p[:bytes])
+				bytes, _ = (*re.conn).Write(p[:bytes])
 			}
 			totalBytes += int64(bytes)
 			if err != nil {
 				break
 			}
 			// Only set time if successfully sent
-			c.lastReq = time.Now()
+			re.lastReq = time.Now()
 		}
 	} else {
 		var bytes int64
-		bytes, err = c.bufIn.WriteTo(*c.out)
+		bytes, err = lo.buf.WriteTo(*re.conn)
 		totalBytes += bytes
 	}
 	if err == nil || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "time") {
 		if *verbose {
-			logger.Printf("%s %5d:          *    Local connection closed. Sent %d bytes.", c.mode, c.total, totalBytes)
+			logger.Printf("%s %5d:          *    Local connection closed. Sent %d bytes.", lo.mode, lo.total, totalBytes)
 		}
 	} else if strings.Contains(err.Error(), "reset") {
 		if *verbose {
-			logger.Printf("%s %5d:          *    Local connection reset. Sent %d bytes.", c.mode, c.total, totalBytes)
+			logger.Printf("%s %5d:          *    Local connection reset. Sent %d bytes.", lo.mode, lo.total, totalBytes)
 		}
 	} else {
 		if *verbose {
-			logger.Printf("%s %5d:         ERR   Local connection closed. Sent %d bytes. Error: %s", c.mode, c.total, totalBytes, err)
+			logger.Printf("%s %5d:         ERR   Local connection closed. Sent %d bytes. Error: %s", lo.mode, lo.total, totalBytes, err)
 		}
 	}
 	mu.Lock()
-	sent[c.route] += totalBytes
+	sent[re.route] += totalBytes
 	mu.Unlock()
-	(*c.out).Close()
+	(*re.conn).Close()
 }
 
-func (c *connection) handleRemote(out *net.Conn, network string, timeout, route, server int, start chan bool, try, do chan int, stop2 chan bool) {
+func (re *remoteConn) handleRemote(lo localConn, out *net.Conn, network string, timeout, route, server int, start chan bool, try, do chan int, stop2 chan bool) {
 	mu.Lock()
 	jobs[route]++
 	mu.Unlock()
 	select {
 	case <-start:
-		c.doRemote(out, network, timeout, route, server, try, do, stop2)
+		re.doRemote(lo, out, network, timeout, route, server, try, do, stop2)
 	case s := <-do:
 		do <- s
 	}
@@ -473,29 +481,29 @@ func (c *connection) handleRemote(out *net.Conn, network string, timeout, route,
 	mu.Unlock()
 }
 
-func (c *connection) doRemote(out *net.Conn, network string, timeout, route, server int, try, do chan int, stop2 chan bool) {
+func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, timeout, route, server int, try, do chan int, stop2 chan bool) {
 	var dp string
 	var err error
 	if route == 1 {
-		dp = net.JoinHostPort(c.dest, c.dport)
+		dp = net.JoinHostPort(lo.dest, lo.dport)
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s", c.mode, c.total, route, network, dp)
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s", lo.mode, lo.total, route, network, dp)
 		}
 		*out, err = net.DialTimeout(network, dp, time.Second*time.Duration(timeout))
 	} else {
 		dialer, err1 := proxy.SOCKS5("tcp", socks[server-1].addr, nil, &net.Dialer{Timeout: time.Second * time.Duration(timeout)})
 		if err1 != nil {
-			logger.Printf("%s %5d: ERR         %d Failed to dial SOCKS server %s. Error: %s", c.mode, c.total, route, socks[server-1].addr, err)
+			logger.Printf("%s %5d: ERR         %d Failed to dial SOCKS server %s. Error: %s", lo.mode, lo.total, route, socks[server-1].addr, err)
 			try <- 0
 			return
 		}
-		if c.host != "" {
-			dp = net.JoinHostPort(c.host, c.dport)
+		if lo.host != "" {
+			dp = net.JoinHostPort(lo.host, lo.dport)
 		} else {
-			dp = net.JoinHostPort(c.dest, c.dport)
+			dp = net.JoinHostPort(lo.dest, lo.dport)
 		}
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", c.mode, c.total, route, network, dp, socks[server-1].addr)
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, route, network, dp, socks[server-1].addr)
 		}
 		*out, err = dialer.Dial(network, dp)
 	}
@@ -540,19 +548,19 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 	if err != nil {
 		if strings.Contains(err.Error(), "time") {
 			if *verbose {
-				logger.Printf("%s %5d: SYN         %d Initial connection timeout", c.mode, c.total, route)
+				logger.Printf("%s %5d: SYN         %d Initial connection timeout", lo.mode, lo.total, route)
 			}
 		} else if strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "reset") {
 			if *verbose {
-				logger.Printf("%s %5d: RST         %d Initial connection reset", c.mode, c.total, route)
+				logger.Printf("%s %5d: RST         %d Initial connection reset", lo.mode, lo.total, route)
 			}
 		} else if strings.Contains(err.Error(), "no such host") {
 			if *verbose {
-				logger.Printf("%s %5d: NXD         %d Domain lookup failed", c.mode, c.total, route)
+				logger.Printf("%s %5d: NXD         %d Domain lookup failed", lo.mode, lo.total, route)
 			}
 		} else {
 			if *verbose {
-				logger.Printf("%s %5d: ERR         %d Failed to dial server. Error: %s", c.mode, c.total, route, err)
+				logger.Printf("%s %5d: ERR         %d Failed to dial server. Error: %s", lo.mode, lo.total, route, err)
 			}
 		}
 		try <- 0
@@ -562,7 +570,7 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 		tcp.SetLinger(0)
 	}*/
 	if *verbose {
-		logger.Printf("%s %5d:  *          %d TCP connection established", c.mode, c.total, route)
+		logger.Printf("%s %5d:  *          %d TCP connection established", lo.mode, lo.total, route)
 	}
 	mu.Lock()
 	open[route]++
@@ -574,11 +582,11 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 		mu.Unlock()
 	}()
 
-	if route == 1 && !c.ruleBased && *dnsOK && c.mode == "H" && c.host != "" {
+	if route == 1 && !re.ruleBased && *dnsOK && lo.mode == "H" && lo.host != "" {
 		// dest is hostname, match IP rules before sending first byte if DNS is ok
 		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
-			newRoute, c.ruleBased = matchIP(c.total, c.mode, tcpAddr.IP)
+			newRoute, re.ruleBased = matchIP(lo.total, lo.mode, tcpAddr.IP)
 			switch newRoute {
 			case 0:
 			case 1:
@@ -595,11 +603,11 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 	}
 
 	// Send first byte to server
-	if len(c.first) > 0 {
+	if len(re.first) > 0 {
 		(*out).SetWriteDeadline(time.Now().Add(time.Second * time.Duration(timeout)))
-		if _, err := (*out).Write(c.first); err != nil {
+		if _, err := (*out).Write(re.first); err != nil {
 			if *verbose {
-				logger.Printf("%s %5d: ERR         %d Failed to send first byte to server. Error: %s", c.mode, c.total, route, err)
+				logger.Printf("%s %5d: ERR         %d Failed to send first byte to server. Error: %s", lo.mode, lo.total, route, err)
 			}
 			try <- 0
 			return
@@ -613,13 +621,13 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 	var firstResp *http.Response
 	bufOut := bufio.NewReader(*out)
 	n := 0
-	if c.firstIsFull {
+	if re.firstIsFull {
 		(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 100))
 	} else {
 		(*out).SetReadDeadline(time.Now().Add(time.Second * time.Duration(timeout)))
 	}
-	if c.mode == "H" && c.currentReq != nil {
-		firstResp, err = http.ReadResponse(bufOut, c.currentReq)
+	if lo.mode == "H" && re.firstReq != nil {
+		firstResp, err = http.ReadResponse(bufOut, re.firstReq)
 	} else {
 		n, err = bufOut.Read(firstIn)
 	}
@@ -628,22 +636,22 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 
 	if err != nil {
 		// If request is only partially sent, timeout is normal
-		if !c.firstIsFull || !strings.Contains(err.Error(), "time") {
+		if !re.firstIsFull || !strings.Contains(err.Error(), "time") {
 			if strings.Contains(err.Error(), "reset") {
 				if *verbose {
-					logger.Printf("%s %5d:     RST     %d First byte reset", c.mode, c.total, route)
+					logger.Printf("%s %5d:     RST     %d First byte reset", lo.mode, lo.total, route)
 				}
 			} else if strings.Contains(err.Error(), "time") {
 				if *verbose {
-					logger.Printf("%s %5d:     PSH     %d First byte timeout", c.mode, c.total, route)
+					logger.Printf("%s %5d:     PSH     %d First byte timeout", lo.mode, lo.total, route)
 				}
 			} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				if *verbose {
-					logger.Printf("%s %5d:     FIN     %d First byte from server is EOF", c.mode, c.total, route)
+					logger.Printf("%s %5d:     FIN     %d First byte from server is EOF", lo.mode, lo.total, route)
 				}
 			} else if !strings.Contains(err.Error(), "closed") {
 				if *verbose {
-					logger.Printf("%s %5d:     ERR     %d Connection closed before receiving first byte. Error: %s", c.mode, c.total, route, err)
+					logger.Printf("%s %5d:     ERR     %d Connection closed before receiving first byte. Error: %s", lo.mode, lo.total, route, err)
 				}
 			}
 			try <- 0
@@ -651,51 +659,51 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 		}
 	} else {
 		// If there is response, remove full flag
-		c.firstIsFull = false
+		re.firstIsFull = false
 		// Check response validity
-		if c.mode == "H" && c.currentReq != nil {
+		if lo.mode == "H" && re.firstReq != nil {
 			if *verbose {
-				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms.", c.total, route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
+				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms.", lo.total, route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
 			}
-			if route == 1 && !c.ruleBased && findRouteForText(firstResp.Status, httpRules, false) == 2 {
+			if route == 1 && !re.ruleBased && findRouteForText(firstResp.Status, httpRules, false) == 2 {
 				if *verbose {
-					logger.Printf("%s %5d:      *      %d HTTP Status in blocklist", c.mode, c.total, route)
+					logger.Printf("%s %5d:      *      %d HTTP Status in blocklist", lo.mode, lo.total, route)
 				}
 				try <- 0
 				return
 			}
 		} else {
 			if *verbose {
-				logger.Printf("%s %5d:      *      %d First %d bytes from server. TTFB %d ms.", c.mode, c.total, route, n, ttfb.Milliseconds())
+				logger.Printf("%s %5d:      *      %d First %d bytes from server. TTFB %d ms.", lo.mode, lo.total, route, n, ttfb.Milliseconds())
 			}
-			if c.currentReq != nil {
+			if re.firstReq != nil {
 				if resp, err := readResponseStatus(bufio.NewReader(bytes.NewReader(firstIn[:n]))); err == nil {
 					if *verbose {
-						logger.Printf("%s %5d:      *      %d HTTP Status %s", c.mode, c.total, route, resp.Status)
+						logger.Printf("%s %5d:      *      %d HTTP Status %s", lo.mode, lo.total, route, resp.Status)
 					}
-					if route == 1 && !c.ruleBased && findRouteForText(resp.Status, httpRules, false) == 2 {
+					if route == 1 && !re.ruleBased && findRouteForText(resp.Status, httpRules, false) == 2 {
 						if *verbose {
-							logger.Printf("%s %5d:      *      %d HTTP Status in blocklist", c.mode, c.total, route)
+							logger.Printf("%s %5d:      *      %d HTTP Status in blocklist", lo.mode, lo.total, route)
 						}
 						try <- 0
 						return
 					}
 				} else {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d Bad HTTP response. Error: %s", c.mode, c.total, route, err)
+						logger.Printf("%s %5d:     ERR     %d Bad HTTP response. Error: %s", lo.mode, lo.total, route, err)
 					}
-					if route == 1 && !c.ruleBased {
+					if route == 1 && !re.ruleBased {
 						try <- 0
 						return
 					}
 				}
 			}
-			if c.tls && n > recordHeaderLen {
+			if re.tls && n > recordHeaderLen {
 				if !(recordType(firstIn[0]) == recordTypeHandshake && firstIn[recordHeaderLen] == typeServerHello) {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake", c.mode, c.total, route)
+						logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake", lo.mode, lo.total, route)
 					}
-					if route == 1 && !c.ruleBased {
+					if route == 1 && !re.ruleBased {
 						try <- 0
 						return
 					}
@@ -705,10 +713,10 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 	}
 
 	// Match IP rules after TLS and HTTP check if DNS is not OK and hostname is available
-	if route == 1 && !c.ruleBased && !*dnsOK && c.host != "" {
+	if route == 1 && !re.ruleBased && !*dnsOK && lo.host != "" {
 		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
-			newRoute, c.ruleBased = matchIP(c.total, c.mode, tcpAddr.IP)
+			newRoute, re.ruleBased = matchIP(lo.total, lo.mode, tcpAddr.IP)
 			switch newRoute {
 			case 0:
 			case 1:
@@ -723,6 +731,7 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 			}
 		}
 	}
+
 	try <- server
 
 	// Wait for signal to go ahead
@@ -731,23 +740,25 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 	if doServer == server {
 		// Drain channel so that sender will not block
 		defer func() {
-			for len(c.reqs) > 0 {
-				<-c.reqs
+			for len(re.reqs) > 0 {
+				<-re.reqs
 			}
-			logger.Printf("%s %5d:      *      %d To delete route %s %s", c.mode, c.total, route, c.dest, c.host)
+			if *verbose {
+				logger.Printf("%s %5d:      *      %d Delete route for %s %s", lo.mode, lo.total, route, lo.dest, lo.host)
+			}
 			if !*fastRoute {
-				rt.del(c.dest, c.host, false, c.total)
+				rt.del(lo.dest, lo.host, true, lo.total)
 			}
 		}()
 		// Set last request time to sent time before writeing response to client
 		// Do not set initially at client side as it's racy
-		c.lastReq = sentTime
+		re.lastReq = sentTime
 		if *verbose {
-			logger.Printf("%s %5d:      *      %d Continue %s %s -> %s", c.mode, c.total, route, (*out).LocalAddr().Network(), (*out).LocalAddr(), (*out).RemoteAddr())
+			logger.Printf("%s %5d:      *      %d Continue %s %s -> %s", lo.mode, lo.total, route, (*out).LocalAddr().Network(), (*out).LocalAddr(), (*out).RemoteAddr())
 		}
-		if c.mode == "H" && c.currentReq != nil {
+		if lo.mode == "H" && re.firstReq != nil {
 			var totalBytes, accum int64
-			accumStart := c.lastReq
+			accumStart := re.lastReq
 			for {
 				var resp *http.Response
 				if firstResp != nil {
@@ -756,13 +767,13 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 				} else {
 					var err error
 					if _, err = bufOut.ReadByte(); err == nil {
-						if c.firstIsFull {
+						if re.firstIsFull {
 							bufOut.UnreadByte()
-							resp, err = http.ReadResponse(bufOut, c.currentReq)
-							c.firstIsFull = false
-						} else if len(c.reqs) > 0 {
+							resp, err = http.ReadResponse(bufOut, re.firstReq)
+							re.firstIsFull = false
+						} else if len(re.reqs) > 0 {
 							bufOut.UnreadByte()
-							resp, err = http.ReadResponse(bufOut, <-c.reqs)
+							resp, err = http.ReadResponse(bufOut, <-re.reqs)
 						} else {
 							err = errors.New("HTTP response received with no matching request")
 						}
@@ -771,12 +782,12 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 						totalTime := time.Since(sentTime)
 						if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "closed") {
 							if *verbose {
-								logger.Printf("H %5d:          *  %d Remote connection closed. Received %d bytes in %.1f s.", c.total, route, totalBytes, totalTime.Seconds())
+								logger.Printf("H %5d:          *  %d Remote connection closed. Received %d bytes in %.1f s.", lo.total, route, totalBytes, totalTime.Seconds())
 							}
-							t := time.Since(c.lastReq).Seconds()
-							if route == 1 && !c.ruleBased && t > 30 && totalBytes < 1000 {
+							t := time.Since(re.lastReq).Seconds()
+							if route == 1 && !re.ruleBased && t > 30 && totalBytes < 1000 {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:         ERR %d Connection to %s %s likely cut off, %.1f s since last request", c.total, route, c.host, tcpAddr, t)
+									logger.Printf("H %5d:         ERR %d Connection to %s %s likely cut off, %.1f s since last request", lo.total, route, lo.host, tcpAddr, t)
 									/*logger.Printf("H %5d:         ADD %d Connection likely cut off, %.1f s since last request, %s %s added to blocked list", total, route, t, host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
 									blockedHostSet.add(host)*/
@@ -784,35 +795,35 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 							}
 						} else if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
 							if *verbose {
-								logger.Printf("H %5d:         RST %d Remote connection reset. Received %d bytes in %.1f s, %.1f s since last request. Error: %s", c.total, route, totalBytes, totalTime.Seconds(), time.Since(c.lastReq).Seconds(), err)
+								logger.Printf("H %5d:         RST %d Remote connection reset. Received %d bytes in %.1f s, %.1f s since last request. Error: %s", lo.total, route, totalBytes, totalTime.Seconds(), time.Since(re.lastReq).Seconds(), err)
 							}
-							if route == 1 && !c.ruleBased && totalTime.Seconds() < blockSafeTime {
+							if route == 1 && !re.ruleBased && totalTime.Seconds() < blockSafeTime {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:         ADD %d TCP reset detected, %s %s added to blocked list", c.total, route, c.host, tcpAddr.IP)
+									logger.Printf("H %5d:         ADD %d TCP reset detected, %s %s added to blocked list", lo.total, route, lo.host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
-									blockedHostSet.add(c.host)
+									blockedHostSet.add(lo.host)
 								}
 							}
 						} else {
 							if *verbose {
-								logger.Printf("H %5d:         ERR %d Remote connection closed. Received %d bytes in %.1f s. Error: %s", c.total, route, totalBytes, totalTime.Seconds(), err)
+								logger.Printf("H %5d:         ERR %d Remote connection closed. Received %d bytes in %.1f s. Error: %s", lo.total, route, totalBytes, totalTime.Seconds(), err)
 							}
 						}
 						mu.Lock()
 						received[route] += totalBytes
 						mu.Unlock()
 						(*out).Close()
-						if len(c.reqs) > 0 {
-							c.in.Close()
+						if len(re.reqs) > 0 {
+							lo.conn.Close()
 						}
 						return
 					}
 					if *verbose {
-						logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d", c.total, route, resp.Status, resp.ContentLength)
+						logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d", lo.total, route, resp.Status, resp.ContentLength)
 					}
 				}
 				header, _ := httputil.DumpResponse(resp, false)
-				if !c.hasConnection {
+				if !re.hasConnection {
 					buf := bufio.NewReader(bytes.NewReader(header))
 					c := []byte("Connection:")
 					p := []byte("Proxy-")
@@ -831,48 +842,48 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 					}
 					header = h
 				}
-				_, err := c.in.Write(header)
+				_, err := lo.conn.Write(header)
 				totalBytes += int64(len(header))
 				if err != nil {
 					if *verbose {
-						logger.Printf("H %5d:     ERR     %d Failed to write HTTP header to client. Error: %s", c.total, route, err)
+						logger.Printf("H %5d:     ERR     %d Failed to write HTTP header to client. Error: %s", lo.total, route, err)
 					}
 					totalBytes += int64(bufOut.Buffered())
 					bufOut.Discard(bufOut.Buffered())
 					(*out).Close()
-					c.in.Close()
+					lo.conn.Close()
 					continue
 				}
 				if resp.ContentLength == -1 && len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked" {
 					cr := newChunkedReader(bufOut)
-					n, bytes, err := cr.copy(c.in)
+					n, bytes, err := cr.copy(lo.conn)
 					totalBytes += bytes
 					if err == nil || errors.Is(err, io.EOF) {
 						if *verbose {
-							logger.Printf("H %5d:      *      %d Parsed %d chunks and %d bytes", c.total, route, n, bytes)
+							logger.Printf("H %5d:      *      %d Parsed %d chunks and %d bytes", lo.total, route, n, bytes)
 						}
 					} else {
 						if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") ||
 							strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") || errors.Is(err, io.ErrUnexpectedEOF) {
 							if *verbose {
-								logger.Printf("H %5d:     RST     %d Chunks parsing reset by server, %.1f s since last request. Error: %s", c.total, route, time.Since(c.lastReq).Seconds(), err)
+								logger.Printf("H %5d:     RST     %d Chunks parsing reset by server, %.1f s since last request. Error: %s", lo.total, route, time.Since(re.lastReq).Seconds(), err)
 							}
-							if route == 1 && !c.ruleBased {
+							if route == 1 && !re.ruleBased {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s %s added to blocked list", c.total, route, c.host, tcpAddr.IP)
+									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s %s added to blocked list", lo.total, route, lo.host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
-									blockedHostSet.add(c.host)
+									blockedHostSet.add(lo.host)
 								}
 							}
 						} else {
 							if *verbose {
-								logger.Printf("H %5d:     ERR     %d Parsed %d chunks and %d bytes but failed to write to client. Error: %s", c.total, route, n, bytes, err)
+								logger.Printf("H %5d:     ERR     %d Parsed %d chunks and %d bytes but failed to write to client. Error: %s", lo.total, route, n, bytes, err)
 							}
 						}
 						totalBytes += int64(bufOut.Buffered())
 						bufOut.Discard(bufOut.Buffered())
 						(*out).Close()
-						c.in.Close()
+						lo.conn.Close()
 						continue
 					}
 					// Write trailer
@@ -882,16 +893,16 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 						trailer = append(trailer, line...)
 						totalBytes += int64(len(line))
 						if len(line) == 2 || err != nil {
-							c.in.Write(trailer)
+							lo.conn.Write(trailer)
 							break
 						}
 					}
 				} else if resp.ContentLength != 0 && resp.Request.Method != "HEAD" {
-					if accumStart.Before(c.lastReq) {
-						accumStart = c.lastReq
+					if accumStart.Before(re.lastReq) {
+						accumStart = re.lastReq
 						accum = 0
 					}
-					bytes, err := c.receiveSend(resp.Body, true, (*out).RemoteAddr(), route, accum)
+					bytes, err := re.writeTo(lo, resp.Body, true, (*out).RemoteAddr(), route, accum)
 					accum += bytes
 					totalBytes += bytes
 					resp.Body.Close()
@@ -901,54 +912,54 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 						if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") ||
 							strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") || errors.Is(err, io.ErrUnexpectedEOF) {
 							if *verbose {
-								logger.Printf("H %5d:     RST     %d HTTP body fetching reset by server, %.1f s since last request. Error: %s", c.total, route, time.Since(c.lastReq).Seconds(), err)
+								logger.Printf("H %5d:     RST     %d HTTP body fetching reset by server, %.1f s since last request. Error: %s", lo.total, route, time.Since(re.lastReq).Seconds(), err)
 							}
-							if route == 1 && !c.ruleBased {
+							if route == 1 && !re.ruleBased {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s %s added to blocked list", c.total, route, c.host, tcpAddr.IP)
+									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s %s added to blocked list", lo.total, route, lo.host, tcpAddr.IP)
 									blockedIPSet.add(tcpAddr.IP)
-									blockedHostSet.add(c.host)
+									blockedHostSet.add(lo.host)
 								}
 							}
 						} else {
 							if *verbose {
-								logger.Printf("H %5d:     ERR     %d Failed to write HTTP body to client. Error: %s", c.total, route, err)
+								logger.Printf("H %5d:     ERR     %d Failed to write HTTP body to client. Error: %s", lo.total, route, err)
 							}
 						}
 						totalBytes += int64(bufOut.Buffered())
 						bufOut.Discard(bufOut.Buffered())
 						(*out).Close()
-						c.in.Close()
+						lo.conn.Close()
 						continue
 					}
 				}
 				if resp.Close {
-					defer c.in.Close()
+					defer lo.conn.Close()
 				}
 			}
 		} else {
-			c.in.Write(firstIn[:n])
-			bytes, err := c.receiveSend(bufOut, false, (*out).RemoteAddr(), route, int64(n))
+			lo.conn.Write(firstIn[:n])
+			bytes, err := re.writeTo(lo, bufOut, false, (*out).RemoteAddr(), route, int64(n))
 			totalBytes := int64(n) + bytes + int64(bufOut.Buffered())
 			totalTime := time.Since(sentTime)
 			if err == nil || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "time") {
 				if *verbose {
-					logger.Printf("%s %5d:          *  %d Remote connection closed. Received %d bytes in %.1f s.", c.mode, c.total, route, totalBytes, totalTime.Seconds())
+					logger.Printf("%s %5d:          *  %d Remote connection closed. Received %d bytes in %.1f s.", lo.mode, lo.total, route, totalBytes, totalTime.Seconds())
 				}
-				t := time.Since(c.lastReq).Seconds()
-				if route == 1 && !c.ruleBased && c.tls && totalBytes == int64(n) && totalTime.Seconds() > 5 && !c.lastReq.Equal(sentTime) {
+				t := time.Since(re.lastReq).Seconds()
+				if route == 1 && !re.ruleBased && re.tls && totalBytes == int64(n) && totalTime.Seconds() > 5 && !re.lastReq.Equal(sentTime) {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 						if *dnsOK {
-							logger.Printf("%s %5d:         ADD %d TLS handshake cut off, %s %s added to blocked list", c.mode, c.total, route, c.host, tcpAddr.IP)
+							logger.Printf("%s %5d:         ADD %d TLS handshake cut off, %s %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP)
 							blockedIPSet.add(tcpAddr.IP)
-						} else if c.host != "" {
-							logger.Printf("%s %5d:         ADD %d TLS handshake cut off, %s added to blocked list", c.mode, c.total, route, c.host)
+						} else if lo.host != "" {
+							logger.Printf("%s %5d:         ADD %d TLS handshake cut off, %s added to blocked list", lo.mode, lo.total, route, lo.host)
 						}
-						blockedHostSet.add(c.host)
+						blockedHostSet.add(lo.host)
 					}
-				} else if route == 1 && !c.ruleBased && t > 30 && totalBytes < 1000 {
+				} else if route == 1 && !re.ruleBased && t > 30 && totalBytes < 1000 {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-						logger.Printf("%s %5d:         ERR %d Connection to %s %s likely cut off, %.1f s since last request", c.mode, c.total, route, c.host, tcpAddr, t)
+						logger.Printf("%s %5d:         ERR %d Connection to %s %s likely cut off, %.1f s since last request", lo.mode, lo.total, route, lo.host, tcpAddr, t)
 						/*logger.Printf("%s %5d:         ADD %d Connection likely cut off, %.1f s since last request, %s %s added to blocked list", mode, total, route, t, host, tcpAddr.IP)
 						blockedIPSet.add(tcpAddr.IP)
 						blockedHostSet.add(host)*/
@@ -956,24 +967,24 @@ func (c *connection) doRemote(out *net.Conn, network string, timeout, route, ser
 				}
 			} else if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
 				if *verbose {
-					logger.Printf("%s %5d:         RST %d Remote connection reset. Received %d bytes in %.1f s, %.1f s since last request. Error: %s", c.mode, c.total, route, totalBytes, totalTime.Seconds(), time.Since(c.lastReq).Seconds(), err)
+					logger.Printf("%s %5d:         RST %d Remote connection reset. Received %d bytes in %.1f s, %.1f s since last request. Error: %s", lo.mode, lo.total, route, totalBytes, totalTime.Seconds(), time.Since(re.lastReq).Seconds(), err)
 				}
-				if route == 1 && !c.ruleBased && totalTime.Seconds() < blockSafeTime {
+				if route == 1 && !re.ruleBased && totalTime.Seconds() < blockSafeTime {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-						logger.Printf("%s %5d:         ADD %d TCP reset detected, %s %s added to blocked list", c.mode, c.total, route, c.host, tcpAddr.IP)
+						logger.Printf("%s %5d:         ADD %d TCP reset detected, %s %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP)
 						blockedIPSet.add(tcpAddr.IP)
-						blockedHostSet.add(c.host)
+						blockedHostSet.add(lo.host)
 					}
 				}
 			} else {
 				if *verbose {
-					logger.Printf("%s %5d:         ERR %d Remote connection closed. Received %d bytes in %.1f s. Error: %s", c.mode, c.total, route, totalBytes, totalTime.Seconds(), err)
+					logger.Printf("%s %5d:         ERR %d Remote connection closed. Received %d bytes in %.1f s. Error: %s", lo.mode, lo.total, route, totalBytes, totalTime.Seconds(), err)
 				}
 			}
 			mu.Lock()
 			received[route] += totalBytes
 			mu.Unlock()
-			c.in.Close()
+			lo.conn.Close()
 		}
 	}
 }
@@ -983,7 +994,7 @@ func matchHost(total int, mode, host string) (route int, ruleBased bool) {
 		route = findRouteForText(host, hostRules, true)
 		if route != 0 {
 			if *verbose {
-				logger.Printf("%s %5d: RLE           Host rule matched for %s. Select route %d", mode, total, host, route)
+				logger.Printf("%s %5d: RUL           Host rule matched for %s. Select route %d", mode, total, host, route)
 			}
 			ruleBased = true
 			return
@@ -1014,7 +1025,7 @@ func matchIP(total int, mode string, ip net.IP) (route int, ruleBased bool) {
 		}
 		if route != 0 {
 			if *verbose {
-				logger.Printf("%s %5d: RLE           IP rule matched for %s. Select route %d", mode, total, ip, route)
+				logger.Printf("%s %5d: RUL           IP rule matched for %s. Select route %d", mode, total, ip, route)
 			}
 			ruleBased = true
 			return
@@ -1023,55 +1034,55 @@ func matchIP(total int, mode string, ip net.IP) (route int, ruleBased bool) {
 	if blockedIPSet.contain(ip) {
 		route = 2
 		if *verbose {
-			logger.Printf("%s %5d: LST           IP %s found in blocked list. Select route %d", mode, total, ip, route)
+			logger.Printf("%s %5d: SET           IP %s found in blocked list. Select route %d", mode, total, ip, route)
 		}
 		return
 	}
 	if slowIPSet.contain(ip) {
 		route = 2
 		if *verbose {
-			logger.Printf("%s %5d: LST           IP %s found in slow list. Select route %d", mode, total, ip, route)
+			logger.Printf("%s %5d: SET           IP %s found in slow list. Select route %d", mode, total, ip, route)
 		}
 		return
 	}
 	return
 }
 
-func (c *connection) receiveSend(out io.Reader, single bool, addr net.Addr, route int, lastBytes int64) (bytes int64, err error) {
-	if route == 1 && *slowSpeed > 0 && !c.ruleBased && contain(chkPorts, c.dport) {
+func (re *remoteConn) writeTo(lo localConn, out io.Reader, single bool, addr net.Addr, route int, lastBytes int64) (bytes int64, err error) {
+	if route == 1 && *slowSpeed > 0 && !re.ruleBased && contain(chkPorts, lo.dport) {
 		var sample int64
 		accum := lastBytes
 		sampleStart := time.Now()
-		accumStart := c.lastReq
+		accumStart := re.lastReq
 		var slow, added bool
 		for {
 			p := make([]byte, bufferSize)
 			var n int
 			n, err = out.Read(p)
 			bytes += int64(n)
-			if sampleStart.Before(c.lastReq) {
-				sampleStart = c.lastReq
+			if sampleStart.Before(re.lastReq) {
+				sampleStart = re.lastReq
 				sample = 0
 			}
-			if !single && accumStart.Before(c.lastReq) {
-				accumStart = c.lastReq
+			if !single && accumStart.Before(re.lastReq) {
+				accumStart = re.lastReq
 				accum = 0
 			}
 			if err == nil {
-				_, err = c.in.Write(p[:n])
+				_, err = lo.conn.Write(p[:n])
 			} else if bytes > 0 {
-				c.in.Write(p[:n])
+				lo.conn.Write(p[:n])
 			}
 			if err != nil {
 				break
 			}
 			if !added && slow {
 				if tcpAddr := addr.(*net.TCPAddr); tcpAddr != nil {
-					logger.Printf("%s %5d:     ADD     %d %s %s added to slow list", c.mode, c.total, route, c.host, tcpAddr.IP)
+					logger.Printf("%s %5d:     ADD     %d %s %s added to slow list", lo.mode, lo.total, route, lo.host, tcpAddr.IP)
 					slowIPSet.add(tcpAddr.IP)
-					slowHostSet.add(c.host)
+					slowHostSet.add(lo.host)
 					if *slowClose {
-						c.in.Close()
+						lo.conn.Close()
 					}
 				}
 				added = true
@@ -1086,7 +1097,7 @@ func (c *connection) receiveSend(out io.Reader, single bool, addr net.Addr, rout
 				aveSpeed := float64(accum) / 1000 / t0
 				if t < maxSampleInterval && (aveSpeed < float64(*slowSpeed) || speed < float64(*slowSpeed)*0.3) && aveSpeed > minSpeed && speed > minSpeed {
 					if *verbose {
-						logger.Printf("%s %5d:      *      %d Slow connection to %s %s at %.1f kB/s, average %.1f kB/s since last request %.1f s ago", c.mode, c.total, route, c.host, addr, speed, aveSpeed, t0)
+						logger.Printf("%s %5d:      *      %d Slow connection to %s %s at %.1f kB/s, average %.1f kB/s since last request %.1f s ago", lo.mode, lo.total, route, lo.host, addr, speed, aveSpeed, t0)
 					}
 					// Set flag to add to list only if this read is not the final one
 					slow = true
@@ -1096,7 +1107,7 @@ func (c *connection) receiveSend(out io.Reader, single bool, addr net.Addr, rout
 			}
 		}
 	} else {
-		bytes, err = io.Copy(c.in, out)
+		bytes, err = io.Copy(lo.conn, out)
 	}
 	return
 }
