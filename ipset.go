@@ -99,9 +99,9 @@ func (t *routingTable) del(dest, host string, delay bool) {
 	} else {
 		key = dest
 	}
-	// Suppose usual reconnect interval is 5 seconds, then the delay should be less
+	// Suppose usual reconnect interval is 3-5 seconds, then the delay should be less
 	if delay {
-		time.Sleep(time.Second * 3)
+		time.Sleep(time.Second * 2)
 	}
 	t.mu.Lock()
 	entry := t.table[key]
