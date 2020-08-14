@@ -306,7 +306,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if *verbose {
 						logger.Printf("%s %5d:      *        Delete existing route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
 					}
-					rt.del(lo.dest, lo.host, false, lo.total)
+					rt.del(lo.dest, lo.host, false)
 				}
 				return false
 			}
@@ -374,7 +374,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 						if *verbose {
 							logger.Printf("%s %5d:      *        Delete existing route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
 						}
-						rt.del(lo.dest, lo.host, false, lo.total)
+						rt.del(lo.dest, lo.host, false)
 					}
 					return false
 				}
@@ -415,7 +415,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if *verbose {
 					logger.Printf("%s %5d:      *        Delete existing route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
 				}
-				rt.del(lo.dest, lo.host, false, lo.total)
+				rt.del(lo.dest, lo.host, false)
 			}
 			return false
 		}
@@ -747,7 +747,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 				logger.Printf("%s %5d:      *      %d Delete route for %s %s", lo.mode, lo.total, route, lo.dest, lo.host)
 			}
 			if !*fastRoute {
-				rt.del(lo.dest, lo.host, true, lo.total)
+				rt.del(lo.dest, lo.host, true)
 			}
 		}()
 		// Set last request time to sent time before writeing response to client

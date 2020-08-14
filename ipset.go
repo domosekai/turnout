@@ -92,7 +92,7 @@ func (e *routeEntry) saveNew(route, server int) {
 	e.mu.Unlock()
 }
 
-func (t *routingTable) del(dest, host string, delay bool, total int) {
+func (t *routingTable) del(dest, host string, delay bool) {
 	var key string
 	if host != "" {
 		key = host
