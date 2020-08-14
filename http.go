@@ -57,18 +57,24 @@ func (lo *localConn) handleHTTP() {
 		mu.Unlock()
 	}()
 
-	new := true
+	newConn := true
 	var totalBytes int64
 	if *verbose {
 		logger.Printf("H %5d:  *            New %s %s -> %s", lo.total, lo.conn.LocalAddr().Network(), lo.conn.RemoteAddr(), lo.conn.LocalAddr())
 	}
 	lo.mode = "H"
 	lo.network = "tcp"
-	re := &remoteConn{}
+	re := new(remoteConn)
 
 	for {
 		req, err := http.ReadRequest(lo.buf)
 		if err != nil {
+			if re.sent > 0 {
+				mu.Lock()
+				sent[re.route] += re.sent
+				mu.Unlock()
+				totalBytes += re.sent
+			}
 			if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") {
 				if *verbose {
 					logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes.", lo.total, totalBytes)
@@ -88,9 +94,6 @@ func (lo *localConn) handleHTTP() {
 					logger.Printf("H %5d:          *    Local connection closed. Sent %d bytes. Error: %s", lo.total, totalBytes, err)
 				}
 			}
-			mu.Lock()
-			sent[re.route] += totalBytes
-			mu.Unlock()
 			break
 		}
 		if *verbose {
@@ -139,25 +142,32 @@ func (lo *localConn) handleHTTP() {
 			}
 			req.Header.Del("Proxy-Connection")
 			header, _ := httputil.DumpRequest(req, false)
-			totalBytes += int64(len(header))
 			if host != lo.dest || port != lo.dport {
 				lo.dest = host
 				lo.host = ""
 				lo.dport = port
-				new = true
+				newConn = true
 			}
-			if !new && re.conn != nil {
+			if !newConn && re.conn != nil {
 				re.hasConnection = connection
 				re.reqs <- req
-				if _, err = (*re.conn).Write(header); err != nil {
-					new = true
+				if n, err := (*re.conn).Write(header); err == nil {
+					re.sent += int64(n)
+				} else {
+					newConn = true
 				}
 			} else {
-				new = true
+				newConn = true
 			}
-			if new {
+			if newConn {
 				if re.conn != nil {
 					(*re.conn).Close()
+				}
+				if re.sent > 0 {
+					mu.Lock()
+					sent[re.route] += re.sent
+					mu.Unlock()
+					totalBytes += re.sent
 				}
 				re = &remoteConn{
 					hasConnection: connection,
@@ -167,7 +177,8 @@ func (lo *localConn) handleHTTP() {
 					firstIsFull:   req.ContentLength != 0,
 				}
 				if re.getRouteFor(*lo) {
-					new = false
+					newConn = false
+					re.sent += int64(len(header))
 				} else {
 					logger.Printf("H %5d: ERR           No route found for %s:%s", lo.total, host, port)
 					lo.buf.Discard(lo.buf.Buffered())
@@ -180,7 +191,7 @@ func (lo *localConn) handleHTTP() {
 			if req.ContentLength == -1 && len(req.TransferEncoding) > 0 && req.TransferEncoding[0] == "chunked" {
 				cr := newChunkedReader(lo.buf)
 				n, bytes, err := cr.copy(*re.conn)
-				totalBytes += bytes
+				re.sent += bytes
 				if errors.Is(err, io.EOF) {
 					if *verbose {
 						logger.Printf("H %5d:  *            Parsed %d chunks and %d bytes", lo.total, n, bytes)
@@ -199,14 +210,14 @@ func (lo *localConn) handleHTTP() {
 					trailer = append(trailer, line...)
 					if len(line) == 2 || err != nil {
 						n, _ := (*re.conn).Write(trailer)
-						totalBytes += int64(n)
+						re.sent += int64(n)
 						break
 					}
 				}
 				re.lastReq = time.Now()
 			} else if req.ContentLength != 0 {
 				bytes, err := io.Copy(*re.conn, req.Body)
-				totalBytes += bytes
+				re.sent += bytes
 				req.Body.Close()
 				if err != nil {
 					if *verbose {

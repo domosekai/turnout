@@ -71,6 +71,7 @@ type remoteConn struct {
 	hasConnection bool
 	tls           bool
 	lastReq       time.Time
+	sent          int64
 }
 
 type server struct {
