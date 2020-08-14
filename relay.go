@@ -425,27 +425,21 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 func (re *remoteConn) relayLocalFor(lo localConn) {
 	totalBytes := int64(len(re.first))
 	var err error
-	if re.route == 1 && *slowSpeed > 0 {
-		for {
-			p := make([]byte, bufferSize)
-			var bytes int
-			bytes, err = lo.buf.Read(p)
-			if err == nil {
-				bytes, err = (*re.conn).Write(p[:bytes])
-			} else {
-				bytes, _ = (*re.conn).Write(p[:bytes])
-			}
-			totalBytes += int64(bytes)
-			if err != nil {
-				break
-			}
-			// Only set time if successfully sent
-			re.lastReq = time.Now()
+	for {
+		p := make([]byte, bufferSize)
+		var bytes int
+		bytes, err = lo.buf.Read(p)
+		if err == nil {
+			bytes, err = (*re.conn).Write(p[:bytes])
+		} else {
+			bytes, _ = (*re.conn).Write(p[:bytes])
 		}
-	} else {
-		var bytes int64
-		bytes, err = lo.buf.WriteTo(*re.conn)
-		totalBytes += bytes
+		totalBytes += int64(bytes)
+		if err != nil {
+			break
+		}
+		// Only set time if successfully sent
+		re.lastReq = time.Now()
 	}
 	if err == nil || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "time") {
 		if *verbose {
