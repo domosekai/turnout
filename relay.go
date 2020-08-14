@@ -744,7 +744,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 				<-re.reqs
 			}
 			if *verbose {
-				logger.Printf("%s %5d:      *      %d Delete route for %s %s", lo.mode, lo.total, route, lo.dest, lo.host)
+				logger.Printf("%s %5d:          *  %d Delete route for %s %s", lo.mode, lo.total, route, lo.dest, lo.host)
 			}
 			if !*fastRoute {
 				rt.del(lo.dest, lo.host, true)

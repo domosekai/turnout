@@ -64,7 +64,7 @@ func (lo *localConn) handleHTTP() {
 	}
 	lo.mode = "H"
 	lo.network = "tcp"
-	var re remoteConn
+	re := &remoteConn{}
 
 	for {
 		req, err := http.ReadRequest(lo.buf)
@@ -159,7 +159,7 @@ func (lo *localConn) handleHTTP() {
 				if re.conn != nil {
 					(*re.conn).Close()
 				}
-				re = remoteConn{
+				re = &remoteConn{
 					hasConnection: connection,
 					reqs:          make(chan *http.Request, httpPipeline),
 					firstReq:      req,
