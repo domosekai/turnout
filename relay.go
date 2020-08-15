@@ -152,6 +152,11 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	if lo.host == "" && net.ParseIP(lo.dest) == nil {
 		lo.host = lo.dest
 	}
+	if lo.host != "" {
+		lo.key = lo.host
+	} else {
+		lo.key = lo.dest
+	}
 
 	// Match rules
 	var route int
@@ -177,17 +182,13 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	// Follow existing routes
 	var newEntry *routeEntry
 	var existed bool
-	if !*fastRoute {
-		if r, s, m, n := rt.addOrNew(lo.dest, lo.host); m {
+	if !*fastSwitch {
+		if r, s, m, n := rt.addOrNew(lo.key); m {
 			if r == route || route == 0 {
 				route = r
 				server = s
 				if *verbose {
-					if lo.host != "" {
-						logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.host, route, server)
-					} else {
-						logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.dest, route, server)
-					}
+					logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.key, route, server)
 				}
 			}
 			existed = true
@@ -265,7 +266,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			if ok1 > 0 {
 				if newEntry != nil {
 					if *verbose {
-						logger.Printf("%s %5d:      *        Save new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+						logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
 					}
 					newEntry.saveNew(1, 1)
 				}
@@ -285,7 +286,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if server2 > 0 {
 					if newEntry != nil {
 						if *verbose {
-							logger.Printf("%s %5d:      *        Save new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
 						}
 						newEntry.saveNew(2, server2)
 					}
@@ -298,15 +299,15 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			} else {
 				if newEntry != nil {
 					if *verbose {
-						logger.Printf("%s %5d:      *        Delete new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+						logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
 					}
-					rt.unlockAndDel(lo.dest, lo.host, newEntry)
+					rt.unlockAndDel(lo.key, newEntry)
 				}
 				if existed {
 					if *verbose {
-						logger.Printf("%s %5d:      *        Delete existing route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+						logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
 					}
-					rt.del(lo.dest, lo.host, false)
+					rt.del(lo.key, false)
 				}
 				return false
 			}
@@ -318,7 +319,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if available1 == 0 {
 					if newEntry != nil {
 						if *verbose {
-							logger.Printf("%s %5d:      *        Save new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
 						}
 						newEntry.saveNew(2, server2)
 					}
@@ -330,7 +331,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				} else if !wait {
 					if newEntry != nil {
 						if *verbose {
-							logger.Printf("%s %5d:      *        Save new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
 						}
 						newEntry.saveNew(2, server2)
 					}
@@ -366,15 +367,15 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				} else if available1 == 0 {
 					if newEntry != nil {
 						if *verbose {
-							logger.Printf("%s %5d:      *        Delete new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+							logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
 						}
-						rt.unlockAndDel(lo.dest, lo.host, newEntry)
+						rt.unlockAndDel(lo.key, newEntry)
 					}
 					if existed {
 						if *verbose {
-							logger.Printf("%s %5d:      *        Delete existing route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+							logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
 						}
-						rt.del(lo.dest, lo.host, false)
+						rt.del(lo.key, false)
 					}
 					return false
 				}
@@ -385,7 +386,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			if server2 > 0 && available2 > 0 {
 				if newEntry != nil {
 					if *verbose {
-						logger.Printf("%s %5d:      *        Save new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+						logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
 					}
 					newEntry.saveNew(2, server2)
 				}
@@ -407,15 +408,15 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			}
 			if newEntry != nil {
 				if *verbose {
-					logger.Printf("%s %5d:      *        Delete new route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+					logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
 				}
-				rt.unlockAndDel(lo.dest, lo.host, newEntry)
+				rt.unlockAndDel(lo.key, newEntry)
 			}
 			if existed {
 				if *verbose {
-					logger.Printf("%s %5d:      *        Delete existing route for %s %s", lo.mode, lo.total, lo.dest, lo.host)
+					logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
 				}
-				rt.del(lo.dest, lo.host, false)
+				rt.del(lo.key, false)
 			}
 			return false
 		}
@@ -491,11 +492,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 			try <- 0
 			return
 		}
-		if lo.host != "" {
-			dp = net.JoinHostPort(lo.host, lo.dport)
-		} else {
-			dp = net.JoinHostPort(lo.dest, lo.dport)
-		}
+		dp = net.JoinHostPort(lo.key, lo.dport)
 		if *verbose {
 			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, route, network, dp, socks[server-1].addr)
 		}
@@ -737,11 +734,11 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 			for len(re.reqs) > 0 {
 				<-re.reqs
 			}
-			if *verbose {
-				logger.Printf("%s %5d:          *  %d Delete route for %s %s", lo.mode, lo.total, route, lo.dest, lo.host)
+			if !*fastSwitch {
+				rt.del(lo.key, true)
 			}
-			if !*fastRoute {
-				rt.del(lo.dest, lo.host, true)
+			if *verbose {
+				logger.Printf("%s %5d:          *  %d Deleted route for %s", lo.mode, lo.total, route, lo.key)
 			}
 		}()
 		// Set last request time to sent time before writeing response to client

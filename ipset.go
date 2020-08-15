@@ -92,13 +92,7 @@ func (e *routeEntry) saveNew(route, server int) {
 	e.mu.Unlock()
 }
 
-func (t *routingTable) del(dest, host string, delay bool) {
-	var key string
-	if host != "" {
-		key = host
-	} else {
-		key = dest
-	}
+func (t *routingTable) del(key string, delay bool) {
 	// Suppose usual reconnect interval is 3-5 seconds, then the delay should be less
 	if delay {
 		time.Sleep(time.Second * 2)
@@ -115,13 +109,7 @@ func (t *routingTable) del(dest, host string, delay bool) {
 	t.mu.Unlock()
 }
 
-func (t *routingTable) addOrNew(dest, host string) (route, server int, matched bool, newEntry *routeEntry) {
-	var key string
-	if host != "" {
-		key = host
-	} else {
-		key = dest
-	}
+func (t *routingTable) addOrNew(key string) (route, server int, matched bool, newEntry *routeEntry) {
 	for {
 		t.mu.Lock()
 		if entry := t.table[key]; entry == nil {
@@ -149,13 +137,7 @@ func (t *routingTable) addOrNew(dest, host string) (route, server int, matched b
 	}
 }
 
-func (t *routingTable) unlockAndDel(dest, host string, newEntry *routeEntry) {
-	var key string
-	if host != "" {
-		key = host
-	} else {
-		key = dest
-	}
+func (t *routingTable) unlockAndDel(key string, newEntry *routeEntry) {
 	t.mu.Lock()
 	delete(t.table, key)
 	newEntry.mu.Unlock()

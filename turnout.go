@@ -44,7 +44,7 @@ var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in th
 var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1 (may break connections)")
 var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked list")
 var dnsOK = flag.Bool("dnsok", false, "Trust system DNS resolver (allowing fast IP rule matching)")
-var fastRoute = flag.Bool("fastroute", false, "Do not enforce the same route for a given destination (may break some websites)")
+var fastSwitch = flag.Bool("fastswitch", false, "Do not enforce the same route for a given destination (may break some websites)")
 var verbose = flag.Bool("verbose", false, "Verbose logging")
 var httpBadStatus = flag.String("badhttp", "", "Drop specified (non-TLS) HTTP response from route 1 (e.g. 403,404,5*)")
 var version = "unknown"
@@ -54,6 +54,7 @@ type localConn struct {
 	source, dest  string
 	sport, dport  string
 	host          string
+	key           string
 	conn          net.Conn
 	buf           *bufio.Reader
 	mode, network string
