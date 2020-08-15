@@ -109,8 +109,11 @@ func (t *routingTable) del(key string, delay bool, failedRoute, failedServer int
 	if delay {
 		time.Sleep(time.Second * 2)
 	}
+	// map lookup must be wrapped by locks as map does not allow concurrent read and write, even though the result can't be nil
 	t.mu.Lock()
 	entry := t.table[key]
+	t.mu.Unlock()
+	// This line may block
 	entry.mu.Lock()
 	// Always minus 1 so that other process can know the entry obtained is zombie
 	entry.count--
@@ -118,10 +121,11 @@ func (t *routingTable) del(key string, delay bool, failedRoute, failedServer int
 		entry.failed++
 	}
 	if entry.count == 0 {
+		t.mu.Lock()
 		delete(t.table, key)
+		t.mu.Unlock()
 	}
 	entry.mu.Unlock()
-	t.mu.Unlock()
 }
 
 // Note: The only things allowed without locking the table is adding count or updating route
@@ -132,15 +136,19 @@ func (t *routingTable) addOrLock(key string) (route, server int, exist bool, ent
 			// Lock entry until route is updated
 			if entry == nil {
 				entry = new(routeEntry)
-			}
-			entry.mu.Lock()
-			if entry.count > 0 && entry.failed < 2 {
-				entry.mu.Unlock()
+				entry.mu.Lock()
+				t.table[key] = entry
 				t.mu.Unlock()
-				continue
+			} else {
+				t.mu.Unlock()
+				// Next line may block
+				entry.mu.Lock()
+				// By this time entry could be already deleted or changed
+				if entry.count == 0 || entry.failed < 2 {
+					entry.mu.Unlock()
+					continue
+				}
 			}
-			t.table[key] = entry
-			t.mu.Unlock()
 			return
 		} else {
 			t.mu.Unlock()
@@ -162,11 +170,12 @@ func (t *routingTable) addOrLock(key string) (route, server int, exist bool, ent
 	}
 }
 
-func (t *routingTable) unlock(key string, locked *routeEntry) {
-	t.mu.Lock()
-	if locked.count == 0 {
+// Unlock as new route cannot be found
+func (t *routingTable) unlock(key string, entry *routeEntry) {
+	if entry.count == 0 {
+		t.mu.Lock()
 		delete(t.table, key)
+		t.mu.Unlock()
 	}
-	locked.mu.Unlock()
-	t.mu.Unlock()
+	entry.mu.Unlock()
 }
