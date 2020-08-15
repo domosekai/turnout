@@ -33,6 +33,7 @@ type routeEntry struct {
 	route  int
 	server int
 	count  int
+	failed int
 	mu     sync.Mutex
 }
 
@@ -85,14 +86,25 @@ func (set *hostSet) contain(host string) bool {
 	return false
 }
 
-func (e *routeEntry) saveNew(route, server int) {
+// Unlock and save or update new route
+func (e *routeEntry) update(route, server int) {
 	e.route = route
 	e.server = server
-	e.count = 1
+	e.count++
+	e.failed = 0
 	e.mu.Unlock()
 }
 
-func (t *routingTable) del(key string, delay bool) {
+// Reset failed count on existing route
+func (e *routeEntry) refresh(route, server int) {
+	e.mu.Lock()
+	if e.route == route && e.server == server {
+		e.failed = 0
+	}
+	e.mu.Unlock()
+}
+
+func (t *routingTable) del(key string, delay bool, failedRoute, failedServer int) {
 	// Suppose usual reconnect interval is 3-5 seconds, then the delay should be less
 	if delay {
 		time.Sleep(time.Second * 2)
@@ -102,6 +114,9 @@ func (t *routingTable) del(key string, delay bool) {
 	entry.mu.Lock()
 	// Always minus 1 so that other process can know the entry obtained is zombie
 	entry.count--
+	if entry.route == failedRoute && entry.server == failedServer {
+		entry.failed++
+	}
 	if entry.count == 0 {
 		delete(t.table, key)
 	}
@@ -109,19 +124,29 @@ func (t *routingTable) del(key string, delay bool) {
 	t.mu.Unlock()
 }
 
-func (t *routingTable) addOrNew(key string) (route, server int, matched bool, newEntry *routeEntry) {
+// Note: The only things allowed without locking the table is adding count or updating route
+func (t *routingTable) addOrLock(key string) (route, server int, exist bool, entry *routeEntry) {
 	for {
 		t.mu.Lock()
-		if entry := t.table[key]; entry == nil {
-			// Lock new entry until route is confirmed, releasing table lock
-			newEntry = new(routeEntry)
-			newEntry.mu.Lock()
-			t.table[key] = newEntry
+		if entry = t.table[key]; entry == nil || entry.failed >= 2 {
+			// Lock entry until route is updated
+			if entry == nil {
+				entry = new(routeEntry)
+			}
+			entry.mu.Lock()
+			if entry.count > 0 && entry.failed < 2 {
+				entry.mu.Unlock()
+				t.mu.Unlock()
+				continue
+			}
+			t.table[key] = entry
 			t.mu.Unlock()
 			return
 		} else {
 			t.mu.Unlock()
+			// Locking entry may block, so unlock table first
 			entry.mu.Lock()
+			// But this may result in locking a deleted entry, so check if it's zombie
 			if entry.count == 0 {
 				// zombie entry
 				entry.mu.Unlock()
@@ -131,15 +156,17 @@ func (t *routingTable) addOrNew(key string) (route, server int, matched bool, ne
 			route = entry.route
 			server = entry.server
 			entry.mu.Unlock()
-			matched = true
+			exist = true
 			return
 		}
 	}
 }
 
-func (t *routingTable) unlockAndDel(key string, newEntry *routeEntry) {
+func (t *routingTable) unlock(key string, locked *routeEntry) {
 	t.mu.Lock()
-	delete(t.table, key)
-	newEntry.mu.Unlock()
+	if locked.count == 0 {
+		delete(t.table, key)
+	}
+	locked.mu.Unlock()
 	t.mu.Unlock()
 }

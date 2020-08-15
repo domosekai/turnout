@@ -179,11 +179,11 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		return false
 	}
 
-	// Follow existing routes
-	var newEntry *routeEntry
-	var existed bool
+	// Get existing route or a locked route
+	var entry *routeEntry
+	var exist bool
 	if !*fastSwitch {
-		if r, s, m, n := rt.addOrNew(lo.key); m {
+		if r, s, e, n := rt.addOrLock(lo.key); e {
 			if r == route || route == 0 {
 				route = r
 				server = s
@@ -191,9 +191,10 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.key, route, server)
 				}
 			}
-			existed = true
+			exist = true
+			entry = n
 		} else {
-			newEntry = n
+			entry = n
 		}
 	}
 
@@ -264,11 +265,13 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		// Route 1 sends status, bad2 is set by this time
 		case ok1 = <-try1:
 			if ok1 > 0 {
-				if newEntry != nil {
+				if !exist {
 					if *verbose {
 						logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
 					}
-					newEntry.saveNew(1, 1)
+					entry.update(1, 1)
+				} else {
+					entry.refresh(1, 1)
 				}
 				do1 <- 1
 				if available2 > 0 {
@@ -284,11 +287,13 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					start[1] <- true
 				}
 				if server2 > 0 {
-					if newEntry != nil {
+					if !exist {
 						if *verbose {
 							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
 						}
-						newEntry.saveNew(2, server2)
+						entry.update(2, server2)
+					} else {
+						entry.refresh(2, server2)
 					}
 					do2 <- server2
 					re.route = 2
@@ -297,17 +302,16 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					return true
 				}
 			} else {
-				if newEntry != nil {
+				if !exist {
 					if *verbose {
 						logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
 					}
-					rt.unlockAndDel(lo.key, newEntry)
-				}
-				if existed {
+					rt.unlock(lo.key, entry)
+				} else {
 					if *verbose {
 						logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
 					}
-					rt.del(lo.key, false)
+					rt.del(lo.key, false, route, server)
 				}
 				return false
 			}
@@ -317,11 +321,13 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			if ok2 > 0 && available2 > 0 && server2 == 0 {
 				server2 = ok2
 				if available1 == 0 {
-					if newEntry != nil {
+					if !exist {
 						if *verbose {
 							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
 						}
-						newEntry.saveNew(2, server2)
+						entry.update(2, server2)
+					} else {
+						entry.refresh(2, server2)
 					}
 					do2 <- server2
 					re.route = 2
@@ -329,11 +335,13 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					re.server = server2
 					return true
 				} else if !wait {
-					if newEntry != nil {
+					if !exist {
 						if *verbose {
 							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
 						}
-						newEntry.saveNew(2, server2)
+						entry.update(2, server2)
+					} else {
+						entry.refresh(2, server2)
 					}
 					do2 <- server2
 					do1 <- 0
@@ -365,17 +373,16 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 						}
 					}
 				} else if available1 == 0 {
-					if newEntry != nil {
+					if !exist {
 						if *verbose {
 							logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
 						}
-						rt.unlockAndDel(lo.key, newEntry)
-					}
-					if existed {
+						rt.unlock(lo.key, entry)
+					} else {
 						if *verbose {
 							logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
 						}
-						rt.del(lo.key, false)
+						rt.del(lo.key, false, route, server)
 					}
 					return false
 				}
@@ -384,11 +391,13 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		case <-timer1.C:
 			wait = false
 			if server2 > 0 && available2 > 0 {
-				if newEntry != nil {
+				if !exist {
 					if *verbose {
 						logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
 					}
-					newEntry.saveNew(2, server2)
+					entry.update(2, server2)
+				} else {
+					entry.refresh(2, server2)
 				}
 				do2 <- server2
 				if available1 > 0 {
@@ -406,17 +415,16 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			if available2 > 0 {
 				do2 <- 0
 			}
-			if newEntry != nil {
+			if !exist {
 				if *verbose {
 					logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
 				}
-				rt.unlockAndDel(lo.key, newEntry)
-			}
-			if existed {
+				rt.unlock(lo.key, entry)
+			} else {
 				if *verbose {
 					logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
 				}
-				rt.del(lo.key, false)
+				rt.del(lo.key, false, route, server)
 			}
 			return false
 		}
@@ -735,7 +743,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 				<-re.reqs
 			}
 			if !*fastSwitch {
-				rt.del(lo.key, true)
+				rt.del(lo.key, true, 0, 0)
 			}
 			if *verbose {
 				logger.Printf("%s %5d:          *  %d Deleted route for %s", lo.mode, lo.total, route, lo.key)
