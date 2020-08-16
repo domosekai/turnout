@@ -265,13 +265,18 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		// Route 1 sends status, bad2 is set by this time
 		case ok1 = <-try1:
 			if ok1 > 0 {
-				if !exist {
-					if *verbose {
-						logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+				if !*fastSwitch {
+					if !exist {
+						if *verbose {
+							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+						}
+						entry.update(1, 1)
+					} else {
+						if *verbose {
+							logger.Printf("%s %5d:      *        Reset counter for %s", lo.mode, lo.total, lo.key)
+						}
+						entry.refresh(1, 1)
 					}
-					entry.update(1, 1)
-				} else {
-					entry.refresh(1, 1)
 				}
 				do1 <- 1
 				if available2 > 0 {
@@ -287,13 +292,18 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					start[1] <- true
 				}
 				if server2 > 0 {
-					if !exist {
-						if *verbose {
-							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+					if !*fastSwitch {
+						if !exist {
+							if *verbose {
+								logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+							}
+							entry.update(2, server2)
+						} else {
+							if *verbose {
+								logger.Printf("%s %5d:      *        Reset counter for %s", lo.mode, lo.total, lo.key)
+							}
+							entry.refresh(2, server2)
 						}
-						entry.update(2, server2)
-					} else {
-						entry.refresh(2, server2)
 					}
 					do2 <- server2
 					re.route = 2
@@ -302,16 +312,18 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					return true
 				}
 			} else {
-				if !exist {
-					if *verbose {
-						logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
+				if !*fastSwitch {
+					if !exist {
+						if *verbose {
+							logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
+						}
+						rt.unlock(lo.key, entry)
+					} else {
+						if *verbose {
+							logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
+						}
+						rt.del(lo.key, false, route, server)
 					}
-					rt.unlock(lo.key, entry)
-				} else {
-					if *verbose {
-						logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
-					}
-					rt.del(lo.key, false, route, server)
 				}
 				return false
 			}
@@ -321,13 +333,18 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			if ok2 > 0 && available2 > 0 && server2 == 0 {
 				server2 = ok2
 				if available1 == 0 {
-					if !exist {
-						if *verbose {
-							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+					if !*fastSwitch {
+						if !exist {
+							if *verbose {
+								logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+							}
+							entry.update(2, server2)
+						} else {
+							if *verbose {
+								logger.Printf("%s %5d:      *        Reset counter for %s", lo.mode, lo.total, lo.key)
+							}
+							entry.refresh(2, server2)
 						}
-						entry.update(2, server2)
-					} else {
-						entry.refresh(2, server2)
 					}
 					do2 <- server2
 					re.route = 2
@@ -335,13 +352,18 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					re.server = server2
 					return true
 				} else if !wait {
-					if !exist {
-						if *verbose {
-							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+					if !*fastSwitch {
+						if !exist {
+							if *verbose {
+								logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+							}
+							entry.update(2, server2)
+						} else {
+							if *verbose {
+								logger.Printf("%s %5d:      *        Reset counter for %s", lo.mode, lo.total, lo.key)
+							}
+							entry.refresh(2, server2)
 						}
-						entry.update(2, server2)
-					} else {
-						entry.refresh(2, server2)
 					}
 					do2 <- server2
 					do1 <- 0
@@ -373,16 +395,18 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 						}
 					}
 				} else if available1 == 0 {
-					if !exist {
-						if *verbose {
-							logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
+					if !*fastSwitch {
+						if !exist {
+							if *verbose {
+								logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
+							}
+							rt.unlock(lo.key, entry)
+						} else {
+							if *verbose {
+								logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
+							}
+							rt.del(lo.key, false, route, server)
 						}
-						rt.unlock(lo.key, entry)
-					} else {
-						if *verbose {
-							logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
-						}
-						rt.del(lo.key, false, route, server)
 					}
 					return false
 				}
@@ -391,13 +415,18 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		case <-timer1.C:
 			wait = false
 			if server2 > 0 && available2 > 0 {
-				if !exist {
-					if *verbose {
-						logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+				if !*fastSwitch {
+					if !exist {
+						if *verbose {
+							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+						}
+						entry.update(2, server2)
+					} else {
+						if *verbose {
+							logger.Printf("%s %5d:      *        Reset counter for %s", lo.mode, lo.total, lo.key)
+						}
+						entry.refresh(2, server2)
 					}
-					entry.update(2, server2)
-				} else {
-					entry.refresh(2, server2)
 				}
 				do2 <- server2
 				if available1 > 0 {
@@ -415,16 +444,18 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			if available2 > 0 {
 				do2 <- 0
 			}
-			if !exist {
-				if *verbose {
-					logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
+			if !*fastSwitch {
+				if !exist {
+					if *verbose {
+						logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
+					}
+					rt.unlock(lo.key, entry)
+				} else {
+					if *verbose {
+						logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
+					}
+					rt.del(lo.key, false, route, server)
 				}
-				rt.unlock(lo.key, entry)
-			} else {
-				if *verbose {
-					logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
-				}
-				rt.del(lo.key, false, route, server)
 			}
 			return false
 		}
