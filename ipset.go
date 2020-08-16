@@ -155,8 +155,7 @@ func (t *routingTable) addOrLock(key string) (route, server int, exist bool, ent
 			// Locking entry may block, so unlock table first
 			entry.mu.Lock()
 			// But this may result in locking a deleted entry, so check if it's zombie
-			if entry.count == 0 {
-				// zombie entry
+			if entry.count == 0 || entry.failed >= 2 {
 				entry.mu.Unlock()
 				continue
 			}

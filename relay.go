@@ -55,6 +55,7 @@ func (lo *localConn) getFirstByte() {
 
 	// Prepare remote connection
 	var re remoteConn
+	re.firstIsFull = true
 
 	// TLS Client Hello
 	if n > recordHeaderLen && recordType(first[0]) == recordTypeHandshake && first[recordHeaderLen] == typeClientHello {
@@ -76,6 +77,9 @@ func (lo *localConn) getFirstByte() {
 				}
 			}
 			re.tls = true
+			if n < initialSize {
+				re.firstIsFull = false
+			}
 		}
 	}
 
@@ -89,12 +93,14 @@ func (lo *localConn) getFirstByte() {
 				lo.host, _ = normalizeHostname(req.Host, lo.dport)
 			}
 			re.firstReq = req
+			if req.ContentLength == 0 {
+				re.firstIsFull = false
+			}
 		}
 	}
 
 	// All types
 	re.first = first[:n]
-	re.firstIsFull = n == initialSize
 	if re.getRouteFor(*lo) {
 		re.relayLocalFor(*lo)
 	} else if n > 0 {
@@ -315,12 +321,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if !*fastSwitch {
 					if !exist {
 						if *verbose {
-							logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:      *        Cancel saving new route for %s", lo.mode, lo.total, lo.key)
 						}
 						rt.unlock(lo.key, entry)
 					} else {
 						if *verbose {
-							logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:      *        Add failed count for %s", lo.mode, lo.total, lo.key)
 						}
 						rt.del(lo.key, false, route, server)
 					}
@@ -398,12 +404,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:      *        Cancel saving new route for %s", lo.mode, lo.total, lo.key)
 							}
 							rt.unlock(lo.key, entry)
 						} else {
 							if *verbose {
-								logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:      *        Add failed count for %s", lo.mode, lo.total, lo.key)
 							}
 							rt.del(lo.key, false, route, server)
 						}
@@ -447,12 +453,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			if !*fastSwitch {
 				if !exist {
 					if *verbose {
-						logger.Printf("%s %5d:      *        Cancel adding new route for %s", lo.mode, lo.total, lo.key)
+						logger.Printf("%s %5d:      *        Cancel saving new route for %s", lo.mode, lo.total, lo.key)
 					}
 					rt.unlock(lo.key, entry)
 				} else {
 					if *verbose {
-						logger.Printf("%s %5d:      *        Decrease route count for %s", lo.mode, lo.total, lo.key)
+						logger.Printf("%s %5d:      *        Add failed count for %s", lo.mode, lo.total, lo.key)
 					}
 					rt.del(lo.key, false, route, server)
 				}
@@ -652,7 +658,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 	bufOut := bufio.NewReader(*out)
 	n := 0
 	if re.firstIsFull {
-		(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 100))
+		(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 300))
 	} else {
 		(*out).SetReadDeadline(time.Now().Add(time.Second * time.Duration(timeout)))
 	}
