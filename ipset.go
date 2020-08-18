@@ -105,9 +105,9 @@ func (e *routeEntry) refresh(route, server int) {
 }
 
 func (t *routingTable) del(key string, delay bool, failedRoute, failedServer int) {
-	// Suppose usual reconnect interval is 3-5 seconds, then the delay should be less
+	// This delay should be longer than reasonable reconnection interval to prevent breakage
 	if delay {
-		time.Sleep(time.Second * 2)
+		time.Sleep(time.Second * 30)
 	}
 	// map lookup must be wrapped by locks as map does not allow concurrent read and write, even though the result can't be nil
 	t.mu.Lock()
