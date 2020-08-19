@@ -82,7 +82,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
 - Destination-based server switch
 
-  By default, Turnout saves the route choice for a new destination (by hostname, or IP if hostname is not available) and makes sure that following connections use the same server. The route choice is reset if two consecutive attempts has failed or there has been no connection to the given destination for at least 30 seconds.
+  By default, Turnout saves the route choice for a new destination (by full hostname, or IP if hostname is not available) and makes sure that following connections use the same server. The route choice is reset if two consecutive attempts has failed or there has been no connection to the given destination for at least 30 seconds.
   
   This feature can help alleviating the problem of IP switching with some websites. Use `-fastswitch` option if you want to disable it.
   
@@ -129,9 +129,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   ip route add local 0.0.0.0/0 dev lo table 100
   ```
   
-  Multiple SOCKS servers can be configured to provide fail-over function. 3 priority grades can be set and lower grade servers are only used if higher grade servers fail. In this example, 192.168.1.1:1080 is set as main server (with priority 1) and 192.168.2.1:1080 and 192.168.2.1:1081 are priority-2 servers. Once 192.168.1.1:1080 fails, these two servers will be tried at the same time and the faster one will convey the traffic.
-  
-  Please note that if these servers lead to different remote regions, you may experience issues with some websites or some region-specific content.
+  Multiple SOCKS servers can be configured to provide fail-over function. 3 priority grades can be set and lower grade servers are only used if higher grade servers fail. In this example, 192.168.1.1:1080 is set as main server (with priority 1) and 192.168.2.1:1080 and 192.168.2.1:1081 are priority-2 servers. Once 192.168.1.1:1080 fails, these two servers will be tried at the same time and the faster one will convey the traffic. You can set priorities according to the prices of the servers, for example.
   
   ```shell
   turnout -b 0.0.0.0:2222 -s 192.168.1.1:1080 -s2 192.168.2.1:1080,192.168.2.1:1081 -t
@@ -140,6 +138,8 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
 - HTTP proxy
 
   This command starts an HTTP proxy at local port 8080 and sets 127.0.0.1:1080 as upstream SOCKS5 proxy. Connections with download speed less than 100 kB/s will be added to slow list and routed via route 2 from the next connection.
+  
+  HTTP proxy and transparent proxy can be enabled at the same time.
   
   ```shell
   turnout -h 127.0.0.1:8080 -s 127.0.0.1:1080 -slow 100
