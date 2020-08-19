@@ -36,9 +36,11 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
   ❌ There is no "one size fits all"
   
-- Smart routing (e.g. COW)
+### Smart routing
 
-  Only use route 2 if the site is blocked on route 1.
+- COW
+
+  Only use secondary routes if the site is blocked on the main route.
   
   ✔ Save traffic to minimum
   
@@ -47,8 +49,6 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   ❌ Need learning at startup
   
   ❌ No transparent proxy (not supposed to be used on routers)
-  
-  ❌ Direct route can sometimes be very slow
   
 - Turnout
 
@@ -62,16 +62,36 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
   ✔ Work as both an HTTP proxy (all platforms) and a transparent proxy (Linux only)
   
-  ✔ Slow connection detection (Port 80 and 443 only)
+  ✔ Slow download detection
   
-  ✔ Sniff hostnames for better speed over route 2 (transparent proxy mode)
+  ✔ Sniff hostnames for better speed via SOCKS routes
   
-  ✔ Live with bogus DNS results from ISP
+  ✔ Live with bogus DNS results
   
-  ✔ Multiple SOCKS servers and customizable fail-over solution
+  ✔ Support multiple SOCKS servers with customizable fail-over solution
   
   ❌ No UDP, no DNS and tunneling tools integrated (routing only)
   
+### Technical highlights
+
+- Smart selection of routes
+
+  For TLS connections, Turnout attempts connections via the main route and all priority-1 SOCKS servers simultaneously. If none of them works then priority-2 servers are tried. The fastest server that sends back a valid first byte will be chosen. 
+  
+  For other protocols, attempts are made one at a time according to priority settings (main route, priority-1, priority-2...), because sending the same content via multiple routes may lead to errors.
+  
+- Destination-based server switch
+
+  By default, Turnout saves the route choice for a new destination (by hostname, or IP if hostname is not available) and makes sure that following connections use the same server. The route choice is reset if two consecutive attempts has failed or there has been no connection to the given destination for at least 30 seconds.
+  
+  This feature can help alleviating the problem of IP switching with some websites. Use `-fastswitch` option if you want to disable it.
+  
+- Fail-over design
+
+  Turnout does not monitor the status of the SOCKS servers like clash. All servers are attempted according to the mechanism described above and the failure of one or two servers should not lead to downtime of the service. However, it's inefficient to entirely rely on this fail-over design by specifying a large number of servers, especially of the same priority, which can be CPU-intensive.
+  
+  You are recommended to put in place your own monitoring in parallel to Turnout. For example, you can specify 3 servers for Turnout and periodically monitor them based on some rules. If any one of them is deemed down, replace it with another one serving the same port so that Turnout does not need to restart.
+
 ### Basic usage
 
   Note: Turnout is supposed to be deployed on local network. It is not safe or optimized to use it in a remote environment, such as a VPS.
@@ -161,7 +181,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
     
   - Unreliable ISP
   
-    Turnout is not supposed to be using with highly unreliable ISPs. If your ISP can't provide at least acceptable quality in international or cross-ISP connections (for instance packets are randomly dropped), your better choice is an IP/CIDR based routing plan. Because in that case any benefit from automatic routing will be erased by the poor network condition.
+    Turnout is not supposed to be using with highly unreliable ISPs. If your ISP can't provide at least acceptable quality in international or cross-ISP connections (for instance packets are heavily throttled or randomly dropped), your better choice is an IP/CIDR based routing plan. Because in that case any benefit from automatic routing will be erased by the poor network condition.
     
 ### Credits
 
