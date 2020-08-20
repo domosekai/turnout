@@ -173,7 +173,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	if route == 0 {
 		if ip := net.ParseIP(lo.dest); ip != nil {
 			// dest is IP, match IP rules if dns is ok or hostname is not sniffed
-			if *dnsOK || lo.host == "" {
+			if lo.host == "" || *dnsOK {
 				route, re.ruleBased = matchIP(lo.total, lo.mode, ip)
 			}
 		} else {
@@ -274,7 +274,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if !*fastSwitch {
 					if !exist {
 						if *verbose {
-							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:     NEW       Save new route for %s", lo.mode, lo.total, lo.key)
 						}
 						entry.update(1, 1)
 					} else {
@@ -301,7 +301,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:     NEW       Save new route for %s", lo.mode, lo.total, lo.key)
 							}
 							entry.update(2, server2)
 						} else {
@@ -342,7 +342,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:     NEW       Save new route for %s", lo.mode, lo.total, lo.key)
 							}
 							entry.update(2, server2)
 						} else {
@@ -361,7 +361,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:     NEW       Save new route for %s", lo.mode, lo.total, lo.key)
 							}
 							entry.update(2, server2)
 						} else {
@@ -424,7 +424,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if !*fastSwitch {
 					if !exist {
 						if *verbose {
-							logger.Printf("%s %5d:      *        Save new route for %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:     NEW       Save new route for %s", lo.mode, lo.total, lo.key)
 						}
 						entry.update(2, server2)
 					} else {
@@ -590,6 +590,17 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 			if *verbose {
 				logger.Printf("%s %5d: RST         %d Initial connection reset", lo.mode, lo.total, route)
 			}
+			if route == 1 && !re.ruleBased {
+				if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+					if lo.host == "" || *dnsOK {
+						logger.Printf("%s %5d: ADD         %d TCP reset detected, %s %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP)
+						blockedIPSet.add(tcpAddr.IP)
+					} else {
+						logger.Printf("%s %5d: ADD         %d TCP reset detected, %s added to blocked list", lo.mode, lo.total, route, lo.host)
+					}
+					blockedHostSet.add(lo.host)
+				}
+			}
 		} else if strings.Contains(err.Error(), "no such host") {
 			if *verbose {
 				logger.Printf("%s %5d: NXD         %d Domain lookup failed", lo.mode, lo.total, route)
@@ -676,6 +687,17 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 			if strings.Contains(err.Error(), "reset") {
 				if *verbose {
 					logger.Printf("%s %5d:     RST     %d First byte reset", lo.mode, lo.total, route)
+				}
+				if route == 1 && !re.ruleBased {
+					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+						if lo.host == "" || *dnsOK {
+							logger.Printf("%s %5d:     ADD     %d TCP reset detected, %s %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP)
+							blockedIPSet.add(tcpAddr.IP)
+						} else {
+							logger.Printf("%s %5d:     ADD     %d TCP reset detected, %s added to blocked list", lo.mode, lo.total, route, lo.host)
+						}
+						blockedHostSet.add(lo.host)
+					}
 				}
 			} else if strings.Contains(err.Error(), "time") {
 				if *verbose {
@@ -835,8 +857,12 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 							}
 							if route == 1 && !re.ruleBased && totalTime.Seconds() < blockSafeTime {
 								if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-									logger.Printf("H %5d:         ADD %d TCP reset detected, %s %s added to blocked list", lo.total, route, lo.host, tcpAddr.IP)
-									blockedIPSet.add(tcpAddr.IP)
+									if lo.host == "" || *dnsOK {
+										logger.Printf("H %5d:         ADD %d TCP reset detected, %s %s added to blocked list", lo.total, route, lo.host, tcpAddr.IP)
+										blockedIPSet.add(tcpAddr.IP)
+									} else {
+										logger.Printf("H %5d:         ADD %d TCP reset detected, %s added to blocked list", lo.total, route, lo.host)
+									}
 									blockedHostSet.add(lo.host)
 								}
 							}
@@ -985,10 +1011,10 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 				t := time.Since(re.lastReq).Seconds()
 				if route == 1 && !re.ruleBased && re.tls && totalBytes == int64(n) && totalTime.Seconds() > 5 && !re.lastReq.Equal(sentTime) {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-						if *dnsOK {
+						if lo.host == "" || *dnsOK {
 							logger.Printf("%s %5d:         ADD %d TLS handshake cut off, %s %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP)
 							blockedIPSet.add(tcpAddr.IP)
-						} else if lo.host != "" {
+						} else {
 							logger.Printf("%s %5d:         ADD %d TLS handshake cut off, %s added to blocked list", lo.mode, lo.total, route, lo.host)
 						}
 						blockedHostSet.add(lo.host)
@@ -1007,8 +1033,12 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 				}
 				if route == 1 && !re.ruleBased && totalTime.Seconds() < blockSafeTime {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-						logger.Printf("%s %5d:         ADD %d TCP reset detected, %s %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP)
-						blockedIPSet.add(tcpAddr.IP)
+						if lo.host == "" || *dnsOK {
+							logger.Printf("%s %5d:         ADD %d TCP reset detected, %s %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP)
+							blockedIPSet.add(tcpAddr.IP)
+						} else {
+							logger.Printf("%s %5d:         ADD %d TCP reset detected, %s added to blocked list", lo.mode, lo.total, route, lo.host)
+						}
 						blockedHostSet.add(lo.host)
 					}
 				}
