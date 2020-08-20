@@ -587,19 +587,19 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 				logger.Printf("%s %5d: SYN         %d Initial connection timeout", lo.mode, lo.total, route)
 			}
 		} else if strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "reset") {
+			// Linux: "connect: connection refused"
+			// Windows: "connectex: No connection could be made because the target machine actively refused it."
 			if *verbose {
 				logger.Printf("%s %5d: RST         %d Initial connection reset", lo.mode, lo.total, route)
 			}
 			if route == 1 && !re.ruleBased {
-				if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-					if lo.host == "" || *dnsOK {
-						logger.Printf("%s %5d: ADD         %d TCP reset detected, %s %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP)
-						blockedIPSet.add(tcpAddr.IP)
-					} else {
-						logger.Printf("%s %5d: ADD         %d TCP reset detected, %s added to blocked list", lo.mode, lo.total, route, lo.host)
-					}
-					blockedHostSet.add(lo.host)
+				if ip := net.ParseIP(lo.dest); ip != nil && (lo.host == "" || *dnsOK) {
+					logger.Printf("%s %5d: ADD         %d TCP reset detected, %s %s added to blocked list", lo.mode, lo.total, route, lo.host, ip)
+					blockedIPSet.add(ip)
+				} else if lo.host != "" {
+					logger.Printf("%s %5d: ADD         %d TCP reset detected, %s added to blocked list", lo.mode, lo.total, route, lo.host)
 				}
+				blockedHostSet.add(lo.host)
 			}
 		} else if strings.Contains(err.Error(), "no such host") {
 			if *verbose {
@@ -684,7 +684,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 	if err != nil {
 		// If request is only partially sent, timeout is normal
 		if !re.firstIsFull || !strings.Contains(err.Error(), "time") {
-			if strings.Contains(err.Error(), "reset") {
+			if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
 				if *verbose {
 					logger.Printf("%s %5d:     RST     %d First byte reset", lo.mode, lo.total, route)
 				}
