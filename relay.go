@@ -71,8 +71,8 @@ func (lo *localConn) getFirstByte() {
 				if *verbose {
 					logger.Printf("%s %5d:  *            %s SNI %s", lo.mode, lo.total, m.verString, m.serverName)
 				}
-				if lo.mode == "T" {
-					lo.host, _ = normalizeHostname(m.serverName, lo.dport)
+				if host, _ := normalizeHostname(m.serverName, lo.dport); net.ParseIP(host) == nil {
+					lo.host = host
 				}
 			} else if m.esni {
 				if *verbose {
@@ -96,8 +96,8 @@ func (lo *localConn) getFirstByte() {
 			if *verbose {
 				logger.Printf("%s %5d:  *            HTTP %s Host %s Content-length %d", lo.mode, lo.total, req.Method, req.Host, req.ContentLength)
 			}
-			if lo.mode == "T" {
-				lo.host, _ = normalizeHostname(req.Host, lo.dport)
+			if host, _ := normalizeHostname(req.Host, lo.dport); net.ParseIP(host) == nil {
+				lo.host = host
 			}
 			re.firstReq = req
 			if req.ContentLength == 0 {
@@ -106,15 +106,21 @@ func (lo *localConn) getFirstByte() {
 		}
 	}
 
-	// All types
+	// Only use host as connection and routing key if dest is IP
+	if net.ParseIP(lo.dest) != nil && lo.host != "" {
+		lo.key = lo.host
+	} else {
+		lo.key = lo.dest
+	}
+
 	re.first = first[:n]
 	if re.getRouteFor(*lo) {
 		re.relayLocalFor(*lo)
 	} else if n > 0 {
-		logger.Printf("%s %5d: ERR           No route found for %s %s:%s", lo.mode, lo.total, lo.host, lo.dest, lo.dport)
+		logger.Printf("%s %5d: ERR           No available route to %s:%s", lo.mode, lo.total, lo.key, lo.dport)
 	} else {
 		if *verbose {
-			logger.Printf("%s %5d: ERR           No response from %s:%s", lo.mode, lo.total, lo.dest, lo.dport)
+			logger.Printf("%s %5d: ERR           No greeting from %s:%s", lo.mode, lo.total, lo.key, lo.dport)
 		}
 	}
 
@@ -157,19 +163,6 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	out2 := make([]net.Conn, len(socks))
 	ok1, ok2 := -1, -1
 	var available1, available2 int
-
-	// dest can be IP or hostname, while host should contain hostname only
-	if net.ParseIP(lo.host) != nil {
-		lo.host = ""
-	}
-	if lo.host == "" && net.ParseIP(lo.dest) == nil {
-		lo.host = lo.dest
-	}
-	if lo.host != "" {
-		lo.key = lo.host
-	} else {
-		lo.key = lo.dest
-	}
 
 	// Match rules
 	var route int

@@ -105,6 +105,17 @@ func (lo *localConn) handleHTTP() {
 			rejectHTTP(lo.conn)
 			break
 		}
+		if host != lo.dest || port != lo.dport {
+			lo.dest = host
+			lo.key = host
+			if net.ParseIP(host) == nil {
+				lo.host = host
+			} else {
+				lo.host = ""
+			}
+			lo.dport = port
+			newConn = true
+		}
 
 		if req.Method == "CONNECT" {
 			if re.conn != nil {
@@ -121,8 +132,6 @@ func (lo *localConn) handleHTTP() {
 			if _, err := lo.conn.Write(respBytes); err != nil {
 				break
 			}
-			lo.dest = host
-			lo.dport = port
 			lo.getFirstByte()
 			break
 		} else {
@@ -142,12 +151,6 @@ func (lo *localConn) handleHTTP() {
 			}
 			req.Header.Del("Proxy-Connection")
 			header, _ := httputil.DumpRequest(req, false)
-			if host != lo.dest || port != lo.dport {
-				lo.dest = host
-				lo.host = ""
-				lo.dport = port
-				newConn = true
-			}
 			if !newConn && re.conn != nil {
 				re.hasConnection = connection
 				re.reqs <- req
@@ -180,7 +183,7 @@ func (lo *localConn) handleHTTP() {
 					newConn = false
 					re.sent += int64(len(header))
 				} else {
-					logger.Printf("H %5d: ERR           No route found for %s:%s", lo.total, host, port)
+					logger.Printf("H %5d: ERR           No available route to %s:%s", lo.total, host, port)
 					lo.buf.Discard(lo.buf.Buffered())
 					rejectHTTP(lo.conn)
 					continue
