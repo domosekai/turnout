@@ -42,6 +42,7 @@ var speedPorts = flag.String("speedport", "80,443", "Ports subject to download s
 var slowSpeed = flag.Uint("slow", 0, "Download speed limit (kB/s) on route 1. Slower destinations will be put in a list and use route 2 from next time.")
 var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in the slow list")
 var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1 (may break connections)")
+var slowDry = flag.Bool("slowdry", false, "Report low speed but do not switch route automatically")
 var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked list")
 var dnsOK = flag.Bool("dnsok", false, "Trust system DNS resolver (allowing fast IP rule matching)")
 var fastSwitch = flag.Bool("fastswitch", false, "Do not enforce the same route for a given destination (may break some websites)")

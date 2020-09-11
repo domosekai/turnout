@@ -711,6 +711,10 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 				if *verbose {
 					logger.Printf("%s %5d:     ERR     %d Connection closed before receiving first byte. Error: %s", lo.mode, lo.total, route, err)
 				}
+			} else {
+				if *verbose {
+					logger.Printf("%s %5d:     ERR     %d Error in receiving first byte. Error: %s", lo.mode, lo.total, route, err)
+				}
 			}
 			try <- 0
 			return
@@ -748,7 +752,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 					}
 				} else {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d Bad HTTP response. Error: %s", lo.mode, lo.total, route, err)
+						logger.Printf("%s %5d:     ERR     %d Bad HTTP response from %s. Error: %s", lo.mode, lo.total, route, lo.key, err)
 					}
 					if route == 1 && !re.ruleBased {
 						try <- 0
@@ -759,7 +763,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 			if re.tls && n > recordHeaderLen {
 				if !(recordType(firstIn[0]) == recordTypeHandshake && firstIn[recordHeaderLen] == typeServerHello) {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake", lo.mode, lo.total, route)
+						logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake from %s", lo.mode, lo.total, route, lo.key)
 					}
 					if route == 1 && !re.ruleBased {
 						try <- 0
@@ -1144,11 +1148,13 @@ func (re *remoteConn) writeTo(lo localConn, out io.Reader, single bool, addr net
 			}
 			if !added && slow {
 				if tcpAddr := addr.(*net.TCPAddr); tcpAddr != nil {
-					logger.Printf("%s %5d:     ADD     %d %s %s added to slow list", lo.mode, lo.total, route, lo.host, tcpAddr.IP)
-					slowIPSet.add(tcpAddr.IP)
-					slowHostSet.add(lo.host)
-					if *slowClose {
-						lo.conn.Close()
+					logger.Printf("%s %5d:     SLO     %d %s %s added to slow list", lo.mode, lo.total, route, lo.host, tcpAddr.IP)
+					if !*slowDry {
+						slowIPSet.add(tcpAddr.IP)
+						slowHostSet.add(lo.host)
+						if *slowClose {
+							lo.conn.Close()
+						}
 					}
 				}
 				added = true
