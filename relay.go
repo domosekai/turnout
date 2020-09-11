@@ -786,7 +786,11 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 					}
 				} else {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake from %s", lo.mode, lo.total, route, lo.key)
+						if n > recordHeaderLen+1 && recordType(firstIn[0]) == recordTypeAlert {
+							logger.Printf("%s %5d:     ERR     %d TLS Alert from %s: %s", lo.mode, lo.total, route, lo.key, alertText[alert(firstIn[recordHeaderLen+1])])
+						} else {
+							logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake from %s", lo.mode, lo.total, route, lo.key)
+						}
 					}
 					if route == 1 && !re.ruleBased {
 						try <- 0
