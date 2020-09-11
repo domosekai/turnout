@@ -37,11 +37,18 @@ var (
 
 // Wait for first byte from client, should usually come immediately with ACK in the 3-way handshake, or never come (FTP)
 func (lo *localConn) getFirstByte() {
-	// git on WSL may send first byte with more than 1s delay
+
+	// Set initial timeout to a large value (git may have more than 1s delay)
 	lo.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
 	first := make([]byte, initialSize)
 	n, err := lo.buf.Read(first)
 	if err == nil {
+		if n < initialSize {
+			// Allow subsequent reads within very short period of time
+			lo.conn.SetReadDeadline(time.Now().Add(time.Millisecond * 50))
+			n1, _ := io.ReadFull(lo.buf, first[n:])
+			n = n + n1
+		}
 		if *verbose {
 			logger.Printf("%s %5d:  *            First %d bytes from client", lo.mode, lo.total, n)
 		}
@@ -668,6 +675,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 	var firstResp *http.Response
 	bufOut := bufio.NewReader(*out)
 	n := 0
+	var ttfb time.Duration
 	if re.firstIsFull {
 		(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 300))
 	} else {
@@ -675,11 +683,18 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 	}
 	if lo.mode == "H" && re.firstReq != nil {
 		firstResp, err = http.ReadResponse(bufOut, re.firstReq)
+		ttfb = time.Since(sentTime)
 	} else {
 		n, err = bufOut.Read(firstIn)
+		ttfb = time.Since(sentTime)
+		if err == nil && n < initialSize {
+			// Allow subsequent reads within very short period of time
+			(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 50))
+			n1, _ := io.ReadFull(bufOut, firstIn[n:])
+			n = n + n1
+		}
 	}
 	(*out).SetReadDeadline(time.Time{})
-	ttfb := time.Since(sentTime)
 
 	if err != nil {
 		// If request is only partially sent, timeout is normal
