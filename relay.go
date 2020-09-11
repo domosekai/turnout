@@ -777,13 +777,13 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 							logger.Printf("%s %5d:      *        %s Server Hello", lo.mode, lo.total, m.verString)
 						}
 					}
+				} else if n > recordHeaderLen+1 && recordType(firstIn[0]) == recordTypeAlert {
+					if *verbose {
+						logger.Printf("%s %5d:     ERR     %d TLS Alert from %s: %s", lo.mode, lo.total, route, lo.key, alertText[alert(firstIn[recordHeaderLen+1])])
+					}
 				} else {
 					if *verbose {
-						if n > recordHeaderLen+1 && recordType(firstIn[0]) == recordTypeAlert {
-							logger.Printf("%s %5d:     ERR     %d TLS Alert from %s: %s", lo.mode, lo.total, route, lo.key, alertText[alert(firstIn[recordHeaderLen+1])])
-						} else {
-							logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake from %s", lo.mode, lo.total, route, lo.key)
-						}
+						logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake from %s", lo.mode, lo.total, route, lo.key)
 					}
 					if route == 1 && !re.ruleBased {
 						try <- 0
