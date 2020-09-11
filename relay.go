@@ -69,18 +69,18 @@ func (lo *localConn) getFirstByte() {
 		if m := new(clientHelloMsg); m.unmarshal(first[recordHeaderLen:n]) {
 			if m.serverName != "" {
 				if *verbose {
-					logger.Printf("%s %5d:  *            TLS SNI %s", lo.mode, lo.total, m.serverName)
+					logger.Printf("%s %5d:  *            %s SNI %s", lo.mode, lo.total, m.verString, m.serverName)
 				}
 				if lo.mode == "T" {
 					lo.host, _ = normalizeHostname(m.serverName, lo.dport)
 				}
 			} else if m.esni {
 				if *verbose {
-					logger.Printf("%s %5d:  *            TLS ESNI", lo.mode, lo.total)
+					logger.Printf("%s %5d:  *            %s ESNI", lo.mode, lo.total, m.verString)
 				}
 			} else {
 				if *verbose {
-					logger.Printf("%s %5d:  *            TLS Client Hello", lo.mode, lo.total)
+					logger.Printf("%s %5d:  *            %s Client Hello", lo.mode, lo.total, m.verString)
 				}
 			}
 			re.tls = true
@@ -775,8 +775,16 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 					}
 				}
 			}
-			if re.tls && n > recordHeaderLen {
-				if !(recordType(firstIn[0]) == recordTypeHandshake && firstIn[recordHeaderLen] == typeServerHello) {
+			if re.tls {
+				if n > recordHeaderLen && recordType(firstIn[0]) == recordTypeHandshake && firstIn[recordHeaderLen] == typeServerHello {
+					// No need to parse length and send exactly one record because there could be multiple messages in one handshake record
+					// Just remove trailing check in unmarshal functions
+					if m := new(serverHelloMsg); m.unmarshal(firstIn[recordHeaderLen:n]) {
+						if *verbose {
+							logger.Printf("%s %5d:      *        %s Server Hello", lo.mode, lo.total, m.verString)
+						}
+					}
+				} else {
 					if *verbose {
 						logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake from %s", lo.mode, lo.total, route, lo.key)
 					}

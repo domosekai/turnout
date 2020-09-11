@@ -24,6 +24,14 @@ const (
 	versionSSL30 = 0x0300
 )
 
+var verStrings = map[uint16]string{
+	versionTLS10: "TLS 1.0",
+	versionTLS11: "TLS 1.1",
+	versionTLS12: "TLS 1.2",
+	versionTLS13: "TLS 1.3",
+	versionSSL30: "SSL 3.0",
+}
+
 const (
 	maxPlaintext       = 16384        // maximum plaintext payload length
 	maxCiphertext      = 16384 + 2048 // maximum ciphertext payload length
@@ -142,6 +150,7 @@ type clientHelloMsg struct {
 	secureRenegotiationSupported bool
 	supportedVersions            []uint16
 	esni                         bool
+	verString                    string
 }
 
 func (m *clientHelloMsg) unmarshal(data []byte) bool {
@@ -175,13 +184,18 @@ func (m *clientHelloMsg) unmarshal(data []byte) bool {
 		return false
 	}
 
+	m.verString = verStrings[m.vers]
+	if m.verString == "" {
+		m.verString = "TLS"
+	}
+
 	if s.Empty() {
 		// ClientHello is optionally followed by extension data
 		return true
 	}
 
 	var extensions cryptobyte.String
-	if !s.ReadUint16LengthPrefixed(&extensions) || !s.Empty() {
+	if !s.ReadUint16LengthPrefixed(&extensions) {
 		return false
 	}
 
@@ -233,10 +247,93 @@ func (m *clientHelloMsg) unmarshal(data []byte) bool {
 					return false
 				}
 				m.supportedVersions = append(m.supportedVersions, vers)
+				if m.vers == versionTLS12 && vers == versionTLS13 {
+					m.verString = verStrings[versionTLS13]
+				}
 			}
 		case extensionEncryptedServerName:
 			m.esni = true
 			extData = nil
+		default:
+			// Ignore unknown extensions.
+			continue
+		}
+
+		if !extData.Empty() {
+			return false
+		}
+	}
+
+	return true
+}
+
+type serverHelloMsg struct {
+	raw                          []byte
+	vers                         uint16
+	random                       []byte
+	sessionID                    []byte
+	cipherSuite                  uint16
+	compressionMethod            uint8
+	ocspStapling                 bool
+	ticketSupported              bool
+	secureRenegotiationSupported bool
+	secureRenegotiation          []byte
+	supportedVersion             uint16
+	verString                    string
+}
+
+func (m *serverHelloMsg) unmarshal(data []byte) bool {
+	*m = serverHelloMsg{raw: data}
+	s := cryptobyte.String(data)
+
+	if !s.Skip(4) || // message type and uint24 length field
+		!s.ReadUint16(&m.vers) || !s.ReadBytes(&m.random, 32) ||
+		!readUint8LengthPrefixed(&s, &m.sessionID) ||
+		!s.ReadUint16(&m.cipherSuite) ||
+		!s.ReadUint8(&m.compressionMethod) {
+		return false
+	}
+
+	m.verString = verStrings[m.vers]
+	if m.verString == "" {
+		m.verString = "TLS"
+	}
+
+	if s.Empty() {
+		// ServerHello is optionally followed by extension data
+		return true
+	}
+
+	var extensions cryptobyte.String
+	if !s.ReadUint16LengthPrefixed(&extensions) {
+		return false
+	}
+
+	for !extensions.Empty() {
+		var extension uint16
+		var extData cryptobyte.String
+		if !extensions.ReadUint16(&extension) ||
+			!extensions.ReadUint16LengthPrefixed(&extData) {
+			return false
+		}
+
+		switch extension {
+		case extensionStatusRequest:
+			m.ocspStapling = true
+		case extensionSessionTicket:
+			m.ticketSupported = true
+		case extensionRenegotiationInfo:
+			if !readUint8LengthPrefixed(&extData, &m.secureRenegotiation) {
+				return false
+			}
+			m.secureRenegotiationSupported = true
+		case extensionSupportedVersions:
+			if !extData.ReadUint16(&m.supportedVersion) {
+				return false
+			}
+			if m.vers == versionTLS12 && m.supportedVersion == versionTLS13 {
+				m.verString = verStrings[versionTLS13]
+			}
 		default:
 			// Ignore unknown extensions.
 			continue
