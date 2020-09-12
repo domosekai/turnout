@@ -207,7 +207,7 @@ func main() {
 				logger.Printf("STATUS Route 1 Sent %.1f MB Recv %.1f MB / Route 2 Sent %.1f MB Recv %.1f MB",
 					float64(sent[1])/1000000, float64(received[1])/1000000, float64(sent[2])/1000000, float64(received[2])/1000000)
 				if *verbose {
-					logger.Printf("STATUS Active goroutines per route: Dispatchers %d Workers %d / %d", jobs[0], jobs[1], jobs[2])
+					logger.Printf("STATUS Routing entries: %d Active dispatchers: %d Workers per route: %d / %d", rt.count, jobs[0], jobs[1], jobs[2])
 				}
 			}
 		}()

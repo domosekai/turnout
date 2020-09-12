@@ -39,6 +39,7 @@ type routeEntry struct {
 
 type routingTable struct {
 	table map[string]*routeEntry
+	count int
 	mu    sync.Mutex // for adding / removing entries only, use entry-level locks to edit entries
 }
 
@@ -96,12 +97,17 @@ func (e *routeEntry) save(route, server int) {
 }
 
 // Reset failed count on existing route
-func (e *routeEntry) reset(route, server int) {
+func (e *routeEntry) reset(route, server int) (ok bool) {
 	e.mu.Lock()
+	// By this time existing route can be changed
 	if e.route == route && e.server == server {
 		e.failed = 0
+		ok = true
+	} else {
+		ok = false
 	}
 	e.mu.Unlock()
+	return
 }
 
 func (t *routingTable) del(key string, delay bool, failedRoute, failedServer int) {
@@ -123,6 +129,7 @@ func (t *routingTable) del(key string, delay bool, failedRoute, failedServer int
 	if entry.count == 0 {
 		t.mu.Lock()
 		delete(t.table, key)
+		t.count--
 		t.mu.Unlock()
 	}
 	entry.mu.Unlock()
@@ -138,6 +145,7 @@ func (t *routingTable) addOrLock(key string, matched int) (route, server int, ex
 				entry = new(routeEntry)
 				entry.mu.Lock()
 				t.table[key] = entry
+				t.count++
 				t.mu.Unlock()
 			} else {
 				t.mu.Unlock()
@@ -155,7 +163,7 @@ func (t *routingTable) addOrLock(key string, matched int) (route, server int, ex
 			// Locking entry may block, so unlock table first
 			entry.mu.Lock()
 			// But this may result in locking a deleted entry, so check if it's zombie
-			if entry.count == 0 || entry.failed >= 2 {
+			if entry.count == 0 || entry.failed >= 2 || (matched != 0 && entry.route != matched) {
 				entry.mu.Unlock()
 				continue
 			}
@@ -174,6 +182,7 @@ func (t *routingTable) unlock(key string, entry *routeEntry) {
 	if entry.count == 0 {
 		t.mu.Lock()
 		delete(t.table, key)
+		t.count--
 		t.mu.Unlock()
 	}
 	entry.mu.Unlock()

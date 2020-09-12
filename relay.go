@@ -230,12 +230,10 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	var exist bool
 	if !*fastSwitch {
 		if r, s, e, n := rt.addOrLock(lo.key, route); e {
-			if r == route || route == 0 {
-				route = r
-				server = s
-				if *verbose {
-					logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.key, route, server)
-				}
+			route = r
+			server = s
+			if *verbose {
+				logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.key, route, server)
 			}
 			exist = true
 			entry = n
@@ -318,10 +316,11 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 						}
 						entry.save(1, 1)
 					} else {
-						if *verbose {
-							logger.Printf("%s %5d:      *      1 Reset counter for %s", lo.mode, lo.total, lo.key)
+						if entry.reset(1, 1) {
+							if *verbose {
+								logger.Printf("%s %5d:      *      1 Reset counter for %s", lo.mode, lo.total, lo.key)
+							}
 						}
-						entry.reset(1, 1)
 					}
 				}
 				do1 <- 1
@@ -345,10 +344,11 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 							}
 							entry.save(2, server2)
 						} else {
-							if *verbose {
-								logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
+							if entry.reset(2, server2) {
+								if *verbose {
+									logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
+								}
 							}
-							entry.reset(2, server2)
 						}
 					}
 					do2 <- server2
@@ -384,10 +384,11 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 							}
 							entry.save(2, server2)
 						} else {
-							if *verbose {
-								logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
+							if entry.reset(2, server2) {
+								if *verbose {
+									logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
+								}
 							}
-							entry.reset(2, server2)
 						}
 					}
 					do2 <- server2
@@ -403,10 +404,11 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 							}
 							entry.save(2, server2)
 						} else {
-							if *verbose {
-								logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
+							if entry.reset(2, server2) {
+								if *verbose {
+									logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
+								}
 							}
-							entry.reset(2, server2)
 						}
 					}
 					do2 <- server2
@@ -464,10 +466,11 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 						}
 						entry.save(2, server2)
 					} else {
-						if *verbose {
-							logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
+						if entry.reset(2, server2) {
+							if *verbose {
+								logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
+							}
 						}
-						entry.reset(2, server2)
 					}
 				}
 				do2 <- server2
