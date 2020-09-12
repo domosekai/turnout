@@ -87,7 +87,7 @@ func (set *hostSet) contain(host string) bool {
 }
 
 // Unlock and save or update new route
-func (e *routeEntry) update(route, server int) {
+func (e *routeEntry) save(route, server int) {
 	e.route = route
 	e.server = server
 	e.count++
@@ -96,7 +96,7 @@ func (e *routeEntry) update(route, server int) {
 }
 
 // Reset failed count on existing route
-func (e *routeEntry) refresh(route, server int) {
+func (e *routeEntry) reset(route, server int) {
 	e.mu.Lock()
 	if e.route == route && e.server == server {
 		e.failed = 0
@@ -129,10 +129,10 @@ func (t *routingTable) del(key string, delay bool, failedRoute, failedServer int
 }
 
 // Note: The only things allowed without locking the table is adding count or updating route
-func (t *routingTable) addOrLock(key string) (route, server int, exist bool, entry *routeEntry) {
+func (t *routingTable) addOrLock(key string, matched int) (route, server int, exist bool, entry *routeEntry) {
 	for {
 		t.mu.Lock()
-		if entry = t.table[key]; entry == nil || entry.failed >= 2 {
+		if entry = t.table[key]; entry == nil || entry.failed >= 2 || (matched != 0 && entry.route != matched) {
 			// Lock entry until route is updated
 			if entry == nil {
 				entry = new(routeEntry)
@@ -144,7 +144,7 @@ func (t *routingTable) addOrLock(key string) (route, server int, exist bool, ent
 				// Next line may block
 				entry.mu.Lock()
 				// By this time entry could be already deleted or changed
-				if entry.count == 0 || entry.failed < 2 {
+				if entry.count == 0 || (entry.failed < 2 && entry.route == matched) {
 					entry.mu.Unlock()
 					continue
 				}

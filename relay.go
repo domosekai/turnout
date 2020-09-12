@@ -229,7 +229,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	var entry *routeEntry
 	var exist bool
 	if !*fastSwitch {
-		if r, s, e, n := rt.addOrLock(lo.key); e {
+		if r, s, e, n := rt.addOrLock(lo.key, route); e {
 			if r == route || route == 0 {
 				route = r
 				server = s
@@ -316,12 +316,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 						if *verbose {
 							logger.Printf("%s %5d:     NEW     1 Save new route to %s", lo.mode, lo.total, lo.key)
 						}
-						entry.update(1, 1)
+						entry.save(1, 1)
 					} else {
 						if *verbose {
 							logger.Printf("%s %5d:      *      1 Reset counter for %s", lo.mode, lo.total, lo.key)
 						}
-						entry.refresh(1, 1)
+						entry.reset(1, 1)
 					}
 				}
 				do1 <- 1
@@ -343,12 +343,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 							if *verbose {
 								logger.Printf("%s %5d:     NEW     2 Save new route to %s", lo.mode, lo.total, lo.key)
 							}
-							entry.update(2, server2)
+							entry.save(2, server2)
 						} else {
 							if *verbose {
 								logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
 							}
-							entry.refresh(2, server2)
+							entry.reset(2, server2)
 						}
 					}
 					do2 <- server2
@@ -382,12 +382,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 							if *verbose {
 								logger.Printf("%s %5d:     NEW     2 Save new route to %s", lo.mode, lo.total, lo.key)
 							}
-							entry.update(2, server2)
+							entry.save(2, server2)
 						} else {
 							if *verbose {
 								logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
 							}
-							entry.refresh(2, server2)
+							entry.reset(2, server2)
 						}
 					}
 					do2 <- server2
@@ -401,12 +401,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 							if *verbose {
 								logger.Printf("%s %5d:     NEW     2 Save new route to %s", lo.mode, lo.total, lo.key)
 							}
-							entry.update(2, server2)
+							entry.save(2, server2)
 						} else {
 							if *verbose {
 								logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
 							}
-							entry.refresh(2, server2)
+							entry.reset(2, server2)
 						}
 					}
 					do2 <- server2
@@ -462,12 +462,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 						if *verbose {
 							logger.Printf("%s %5d:     NEW     2 Save new route to %s", lo.mode, lo.total, lo.key)
 						}
-						entry.update(2, server2)
+						entry.save(2, server2)
 					} else {
 						if *verbose {
 							logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
 						}
-						entry.refresh(2, server2)
+						entry.reset(2, server2)
 					}
 				}
 				do2 <- server2
