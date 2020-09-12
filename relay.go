@@ -117,9 +117,6 @@ func (lo *localConn) getFirstByte() {
 	if re.getRouteFor(*lo) {
 		re.relayLocalFor(*lo)
 	} else if n > 0 {
-		if tcp, ok := lo.conn.(*net.TCPConn); ok {
-			tcp.SetLinger(0)
-		}
 		logger.Printf("%s %5d: ERR           No available route to %s:%s", lo.mode, lo.total, lo.key, lo.dport)
 	} else {
 		if *verbose {
@@ -616,6 +613,9 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 		try <- 0
 		return
 	}
+	/*if tcp, ok := (*out).(*net.TCPConn); ok {
+		tcp.SetLinger(0)
+	}*/
 	if *verbose {
 		logger.Printf("%s %5d:  *          %d TCP connection established", lo.mode, lo.total, route)
 	}
