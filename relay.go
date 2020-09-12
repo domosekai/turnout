@@ -808,7 +808,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 					// Just remove trailing check in unmarshal functions
 					if m := new(serverHelloMsg); m.unmarshal(firstIn[recordHeaderLen:n]) {
 						if *verbose {
-							logger.Printf("%s %5d:      *        %s Server Hello", lo.mode, lo.total, m.verString)
+							logger.Printf("%s %5d:      *      %d %s Server Hello", lo.mode, lo.total, route, m.verString)
 						}
 					}
 				} else if n > recordHeaderLen+1 && recordType(firstIn[0]) == recordTypeAlert {

@@ -183,7 +183,6 @@ func (lo *localConn) handleHTTP() {
 					newConn = false
 					re.sent += int64(len(header))
 				} else {
-					logger.Printf("H %5d: ERR           No available route to %s:%s", lo.total, host, port)
 					lo.buf.Discard(lo.buf.Buffered())
 					rejectHTTP(lo.conn)
 					continue
