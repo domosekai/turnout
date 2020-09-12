@@ -107,7 +107,7 @@ func (lo *localConn) handleHTTP() {
 		}
 		if host != lo.dest || port != lo.dport {
 			lo.dest = host
-			lo.key = host
+			lo.key = net.JoinHostPort(host, port)
 			if net.ParseIP(host) == nil {
 				lo.host = host
 			} else {

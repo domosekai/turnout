@@ -151,19 +151,19 @@ func (lo *localConn) getFirstByte() {
 
 	// Only use host as connection and routing key if dest is IP
 	if net.ParseIP(lo.dest) != nil && lo.host != "" {
-		lo.key = lo.host
+		lo.key = net.JoinHostPort(lo.host, lo.dport)
 	} else {
-		lo.key = lo.dest
+		lo.key = net.JoinHostPort(lo.dest, lo.dport)
 	}
 
 	re.first = first[:n]
 	if re.getRouteFor(*lo) {
 		re.relayLocalFor(*lo)
 	} else if n > 0 {
-		logger.Printf("%s %5d: ERR           No available route to %s:%s", lo.mode, lo.total, lo.key, lo.dport)
+		logger.Printf("%s %5d: ERR           No available route to %s", lo.mode, lo.total, lo.key)
 	} else {
 		if *verbose {
-			logger.Printf("%s %5d: ERR           No greeting from %s:%s", lo.mode, lo.total, lo.key, lo.dport)
+			logger.Printf("%s %5d: ERR           No greeting from %s", lo.mode, lo.total, lo.key)
 		}
 	}
 
@@ -317,7 +317,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if !*fastSwitch {
 					if !exist {
 						if *verbose {
-							logger.Printf("%s %5d:     NEW       Save new route for %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:     NEW       Save new route to %s", lo.mode, lo.total, lo.key)
 						}
 						entry.update(1, 1)
 					} else {
@@ -344,7 +344,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:     NEW       Save new route for %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:     NEW       Save new route to %s", lo.mode, lo.total, lo.key)
 							}
 							entry.update(2, server2)
 						} else {
@@ -364,7 +364,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if !*fastSwitch {
 					if !exist {
 						if *verbose {
-							logger.Printf("%s %5d:      *        Cancel saving new route for %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:      *        Cancel saving new route to %s", lo.mode, lo.total, lo.key)
 						}
 						rt.unlock(lo.key, entry)
 					} else {
@@ -385,7 +385,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:     NEW       Save new route for %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:     NEW       Save new route to %s", lo.mode, lo.total, lo.key)
 							}
 							entry.update(2, server2)
 						} else {
@@ -404,7 +404,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:     NEW       Save new route for %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:     NEW       Save new route to %s", lo.mode, lo.total, lo.key)
 							}
 							entry.update(2, server2)
 						} else {
@@ -447,7 +447,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:      *        Cancel saving new route for %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:      *        Cancel saving new route to %s", lo.mode, lo.total, lo.key)
 							}
 							rt.unlock(lo.key, entry)
 						} else {
@@ -467,7 +467,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if !*fastSwitch {
 					if !exist {
 						if *verbose {
-							logger.Printf("%s %5d:     NEW       Save new route for %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:     NEW       Save new route to %s", lo.mode, lo.total, lo.key)
 						}
 						entry.update(2, server2)
 					} else {
@@ -496,7 +496,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			if !*fastSwitch {
 				if !exist {
 					if *verbose {
-						logger.Printf("%s %5d:      *        Cancel saving new route for %s", lo.mode, lo.total, lo.key)
+						logger.Printf("%s %5d:      *        Cancel saving new route to %s", lo.mode, lo.total, lo.key)
 					}
 					rt.unlock(lo.key, entry)
 				} else {
@@ -565,10 +565,9 @@ func (re *remoteConn) handleRemote(lo localConn, out *net.Conn, network string, 
 }
 
 func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, timeout, route, server int, try, do chan int, stop2 chan bool) {
-	var dp string
 	var err error
 	if route == 1 {
-		dp = net.JoinHostPort(lo.dest, lo.dport)
+		dp := net.JoinHostPort(lo.dest, lo.dport)
 		if *verbose {
 			logger.Printf("%s %5d:  *          %d Dialing to %s %s", lo.mode, lo.total, route, network, dp)
 		}
@@ -580,11 +579,10 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 			try <- 0
 			return
 		}
-		dp = net.JoinHostPort(lo.key, lo.dport)
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, route, network, dp, socks[server-1].addr)
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, route, network, lo.key, socks[server-1].addr)
 		}
-		*out, err = dialer.Dial(network, dp)
+		*out, err = dialer.Dial(network, lo.key)
 	}
 	// Binding to interface is not available on Go natively, you have to use raw methods for each platform (SO_BINDTODEVICE on Linux, bind() on Windows) and do communication in raw
 	// Binding to local address may not affect the routing on Linux (you can see packets out of main route with wrong source address)
@@ -864,7 +862,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 				rt.del(lo.key, true, 0, 0)
 			}
 			if *verbose {
-				logger.Printf("%s %5d:          *  %d Deleted route for %s", lo.mode, lo.total, route, lo.key)
+				logger.Printf("%s %5d:          *  %d Deleted route to %s", lo.mode, lo.total, route, lo.key)
 			}
 		}()
 		// Set last request time to sent time before writeing response to client
