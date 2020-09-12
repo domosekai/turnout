@@ -66,7 +66,7 @@ func (lo *localConn) getFirstByte() {
 		if n < len+recordHeaderLen {
 			n1 := len + recordHeaderLen - n
 			if *verbose {
-				logger.Printf("%s %5d:  *            TLS Handshake incomplete. Fetching another %d bytes from client", lo.mode, lo.total, n1)
+				logger.Printf("%s %5d:  *            TLS handshake incomplete. Fetching another %d bytes from client", lo.mode, lo.total, n1)
 			}
 			buf := make([]byte, n1)
 			lo.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
@@ -113,7 +113,7 @@ func (lo *localConn) getFirstByte() {
 		// Check completeness
 		if err != nil && errors.Is(err, io.ErrUnexpectedEOF) {
 			if *verbose {
-				logger.Printf("%s %5d:  *            HTTP Header incomplete. Continue fetching from client", lo.mode, lo.total)
+				logger.Printf("%s %5d:  *            HTTP header incomplete. Continue fetching from client", lo.mode, lo.total)
 			}
 			lo.conn.SetReadDeadline(time.Now().Add(time.Second * 1))
 			n1, _ := io.ReadFull(lo.buf, first[n:])
@@ -159,12 +159,6 @@ func (lo *localConn) getFirstByte() {
 	re.first = first[:n]
 	if re.getRouteFor(*lo) {
 		re.relayLocalFor(*lo)
-	} else if n > 0 {
-		logger.Printf("%s %5d: ERR           No available route to %s", lo.mode, lo.total, lo.key)
-	} else {
-		if *verbose {
-			logger.Printf("%s %5d: ERR           No greeting from %s", lo.mode, lo.total, lo.key)
-		}
 	}
 
 }
@@ -225,6 +219,9 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		}
 	}
 	if route < 0 || route > 2 {
+		if *verbose {
+			logger.Printf("%s %5d:  *            Route to %s is blocked", lo.mode, lo.total, lo.key)
+		}
 		return false
 	}
 
@@ -317,12 +314,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if !*fastSwitch {
 					if !exist {
 						if *verbose {
-							logger.Printf("%s %5d:     NEW       Save new route to %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:     NEW     1 Save new route to %s", lo.mode, lo.total, lo.key)
 						}
 						entry.update(1, 1)
 					} else {
 						if *verbose {
-							logger.Printf("%s %5d:      *        Reset counter for %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:      *      1 Reset counter for %s", lo.mode, lo.total, lo.key)
 						}
 						entry.refresh(1, 1)
 					}
@@ -344,12 +341,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:     NEW       Save new route to %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:     NEW     2 Save new route to %s", lo.mode, lo.total, lo.key)
 							}
 							entry.update(2, server2)
 						} else {
 							if *verbose {
-								logger.Printf("%s %5d:      *        Reset counter for %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
 							}
 							entry.refresh(2, server2)
 						}
@@ -363,16 +360,14 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			} else {
 				if !*fastSwitch {
 					if !exist {
-						if *verbose {
-							logger.Printf("%s %5d:      *        Cancel saving new route to %s", lo.mode, lo.total, lo.key)
-						}
+						logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
 						rt.unlock(lo.key, entry)
 					} else {
-						if *verbose {
-							logger.Printf("%s %5d:      *        Add failed count for %s", lo.mode, lo.total, lo.key)
-						}
+						logger.Printf("%s %5d:     ERR     1 Existing route to %s failed", lo.mode, lo.total, lo.key)
 						rt.del(lo.key, false, route, server)
 					}
+				} else {
+					logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
 				}
 				return false
 			}
@@ -385,12 +380,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:     NEW       Save new route to %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:     NEW     2 Save new route to %s", lo.mode, lo.total, lo.key)
 							}
 							entry.update(2, server2)
 						} else {
 							if *verbose {
-								logger.Printf("%s %5d:      *        Reset counter for %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
 							}
 							entry.refresh(2, server2)
 						}
@@ -404,12 +399,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:     NEW       Save new route to %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:     NEW     2 Save new route to %s", lo.mode, lo.total, lo.key)
 							}
 							entry.update(2, server2)
 						} else {
 							if *verbose {
-								logger.Printf("%s %5d:      *        Reset counter for %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
 							}
 							entry.refresh(2, server2)
 						}
@@ -446,16 +441,14 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				} else if available1 == 0 {
 					if !*fastSwitch {
 						if !exist {
-							if *verbose {
-								logger.Printf("%s %5d:      *        Cancel saving new route to %s", lo.mode, lo.total, lo.key)
-							}
+							logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
 							rt.unlock(lo.key, entry)
 						} else {
-							if *verbose {
-								logger.Printf("%s %5d:      *        Add failed count for %s", lo.mode, lo.total, lo.key)
-							}
+							logger.Printf("%s %5d:     ERR     2 Existing route to %s failed", lo.mode, lo.total, lo.key)
 							rt.del(lo.key, false, route, server)
 						}
+					} else {
+						logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
 					}
 					return false
 				}
@@ -467,12 +460,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if !*fastSwitch {
 					if !exist {
 						if *verbose {
-							logger.Printf("%s %5d:     NEW       Save new route to %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:     NEW     2 Save new route to %s", lo.mode, lo.total, lo.key)
 						}
 						entry.update(2, server2)
 					} else {
 						if *verbose {
-							logger.Printf("%s %5d:      *        Reset counter for %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
 						}
 						entry.refresh(2, server2)
 					}
@@ -495,16 +488,14 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			}
 			if !*fastSwitch {
 				if !exist {
-					if *verbose {
-						logger.Printf("%s %5d:      *        Cancel saving new route to %s", lo.mode, lo.total, lo.key)
-					}
+					logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
 					rt.unlock(lo.key, entry)
 				} else {
-					if *verbose {
-						logger.Printf("%s %5d:      *        Add failed count for %s", lo.mode, lo.total, lo.key)
-					}
+					logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, route, lo.key)
 					rt.del(lo.key, false, route, server)
 				}
+			} else {
+				logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
 			}
 			return false
 		}
@@ -770,7 +761,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 			}
 			if route == 1 && !re.ruleBased && findRouteForText(firstResp.Status, httpRules, false) == 2 {
 				if *verbose {
-					logger.Printf("%s %5d:      *      %d HTTP Status in blocklist", lo.mode, lo.total, route)
+					logger.Printf("%s %5d:      *      %d HTTP status in blocklist", lo.mode, lo.total, route)
 				}
 				try <- 0
 				return
@@ -786,7 +777,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 					}
 					if route == 1 && !re.ruleBased && findRouteForText(resp.Status, httpRules, false) == 2 {
 						if *verbose {
-							logger.Printf("%s %5d:      *      %d HTTP Status in blocklist", lo.mode, lo.total, route)
+							logger.Printf("%s %5d:      *      %d HTTP status in blocklist", lo.mode, lo.total, route)
 						}
 						try <- 0
 						return
@@ -816,7 +807,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 					}
 				} else {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d Bad TLS Handshake from %s", lo.mode, lo.total, route, lo.key)
+						logger.Printf("%s %5d:     ERR     %d Bad TLS handshake from %s", lo.mode, lo.total, route, lo.key)
 					}
 					if route == 1 && !re.ruleBased {
 						try <- 0
