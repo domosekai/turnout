@@ -657,11 +657,18 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 	mu.Lock()
 	open[route]++
 	mu.Unlock()
+	del := false
 	defer func() {
 		(*out).Close()
 		mu.Lock()
 		open[route]--
 		mu.Unlock()
+		if del {
+			rt.del(lo.key, true, 0, 0)
+			if *verbose {
+				logger.Printf("%s %5d:          *  %d Deleted route to %s", lo.mode, lo.total, route, lo.key)
+			}
+		}
 	}()
 
 	if route == 1 && !re.ruleBased && *dnsOK && lo.mode == "H" && lo.host != "" {
@@ -853,10 +860,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 				<-re.reqs
 			}
 			if !*fastSwitch {
-				rt.del(lo.key, true, 0, 0)
-			}
-			if *verbose {
-				logger.Printf("%s %5d:          *  %d Deleted route to %s", lo.mode, lo.total, route, lo.key)
+				del = true
 			}
 		}()
 		// Set last request time to sent time before writeing response to client
