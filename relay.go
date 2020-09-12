@@ -43,12 +43,6 @@ func (lo *localConn) getFirstByte() {
 	first := make([]byte, initialSize)
 	n, err := lo.buf.Read(first)
 	if err == nil {
-		if n < initialSize {
-			// Allow subsequent reads within very short period of time
-			lo.conn.SetReadDeadline(time.Now().Add(time.Millisecond * 50))
-			n1, _ := io.ReadFull(lo.buf, first[n:])
-			n = n + n1
-		}
 		if *verbose {
 			logger.Printf("%s %5d:  *            First %d bytes from client", lo.mode, lo.total, n)
 		}
@@ -64,35 +58,76 @@ func (lo *localConn) getFirstByte() {
 	var re remoteConn
 	re.firstIsFull = true
 
-	// TLS Client Hello
-	if n > recordHeaderLen && recordType(first[0]) == recordTypeHandshake && first[recordHeaderLen] == typeClientHello {
-		if m := new(clientHelloMsg); m.unmarshal(first[recordHeaderLen:n]) {
-			if m.serverName != "" {
+	// TLS
+	if n >= recordHeaderLen && recordType(first[0]) == recordTypeHandshake {
+
+		// Check completeness as it does not make sense to send an incomplete TLS Handshake
+		len := int(first[3])<<8 | int(first[4])
+		if n < len+recordHeaderLen {
+			n1 := len + recordHeaderLen - n
+			if *verbose {
+				logger.Printf("%s %5d:  *            TLS Handshake incomplete. Fetching another %d bytes from client", lo.mode, lo.total, n1)
+			}
+			buf := make([]byte, n1)
+			lo.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
+			_, err = io.ReadFull(lo.buf, buf)
+			lo.conn.SetReadDeadline(time.Time{})
+			if err == nil {
+				first = append(first[:n], buf...)
+				n = n + n1
 				if *verbose {
-					logger.Printf("%s %5d:  *            %s SNI %s", lo.mode, lo.total, m.verString, m.serverName)
-				}
-				if host, _ := normalizeHostname(m.serverName, lo.dport); net.ParseIP(host) == nil {
-					lo.host = host
-				}
-			} else if m.esni {
-				if *verbose {
-					logger.Printf("%s %5d:  *            %s ESNI", lo.mode, lo.total, m.verString)
-				}
-			} else {
-				if *verbose {
-					logger.Printf("%s %5d:  *            %s Client Hello", lo.mode, lo.total, m.verString)
+					logger.Printf("%s %5d:  *            First %d bytes from client", lo.mode, lo.total, n)
 				}
 			}
-			re.tls = true
-			if n < initialSize {
+		}
+
+		// Client Hello
+		if err == nil && n > recordHeaderLen && first[recordHeaderLen] == typeClientHello {
+			if m := new(clientHelloMsg); m.unmarshal(first[recordHeaderLen:n]) {
+				if m.serverName != "" {
+					if *verbose {
+						logger.Printf("%s %5d:  *            %s SNI %s", lo.mode, lo.total, m.verString, m.serverName)
+					}
+					if host, _ := normalizeHostname(m.serverName, lo.dport); net.ParseIP(host) == nil {
+						lo.host = host
+					}
+				} else if m.esni {
+					if *verbose {
+						logger.Printf("%s %5d:  *            %s ESNI", lo.mode, lo.total, m.verString)
+					}
+				} else {
+					if *verbose {
+						logger.Printf("%s %5d:  *            %s Client Hello", lo.mode, lo.total, m.verString)
+					}
+				}
+				re.tls = true
 				re.firstIsFull = false
 			}
 		}
-	}
 
-	// HTTP
-	if n > 0 {
-		if req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(first[:n]))); err == nil {
+	} else if n > 0 {
+
+		// HTTP
+		req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(first[:n])))
+
+		// Check completeness
+		if err != nil && errors.Is(err, io.ErrUnexpectedEOF) {
+			if *verbose {
+				logger.Printf("%s %5d:  *            HTTP Header incomplete. Continue fetching from client", lo.mode, lo.total)
+			}
+			lo.conn.SetReadDeadline(time.Now().Add(time.Second * 1))
+			n1, _ := io.ReadFull(lo.buf, first[n:])
+			lo.conn.SetReadDeadline(time.Time{})
+			if n1 > 0 {
+				n = n + n1
+				if *verbose {
+					logger.Printf("%s %5d:  *            First %d bytes from client", lo.mode, lo.total, n)
+				}
+				req, err = http.ReadRequest(bufio.NewReader(bytes.NewReader(first[:n])))
+			}
+		}
+
+		if err == nil {
 			if *verbose {
 				logger.Printf("%s %5d:  *            HTTP %s Host %s Content-length %d", lo.mode, lo.total, req.Method, req.Host, req.ContentLength)
 			}
@@ -104,6 +139,14 @@ func (lo *localConn) getFirstByte() {
 				re.firstIsFull = false
 			}
 		}
+	}
+
+	if n > 0 && n < initialSize && !re.tls && re.firstReq == nil {
+		// Allow subsequent reads within very short period of time
+		lo.conn.SetReadDeadline(time.Now().Add(time.Millisecond * 100))
+		n1, _ := io.ReadFull(lo.buf, first[n:])
+		lo.conn.SetReadDeadline(time.Time{})
+		n = n + n1
 	}
 
 	// Only use host as connection and routing key if dest is IP
@@ -668,7 +711,6 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 	var firstResp *http.Response
 	bufOut := bufio.NewReader(*out)
 	n := 0
-	var ttfb time.Duration
 	if re.firstIsFull {
 		(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 300))
 	} else {
@@ -676,18 +718,11 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 	}
 	if lo.mode == "H" && re.firstReq != nil {
 		firstResp, err = http.ReadResponse(bufOut, re.firstReq)
-		ttfb = time.Since(sentTime)
 	} else {
 		n, err = bufOut.Read(firstIn)
-		ttfb = time.Since(sentTime)
-		if err == nil && n < initialSize {
-			// Allow subsequent reads within very short period of time
-			(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 50))
-			n1, _ := io.ReadFull(bufOut, firstIn[n:])
-			n = n + n1
-		}
 	}
 	(*out).SetReadDeadline(time.Time{})
+	ttfb := time.Since(sentTime)
 
 	if err != nil {
 		// If request is only partially sent, timeout is normal
