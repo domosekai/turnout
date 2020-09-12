@@ -9,6 +9,7 @@ import (
 
 type ipSetEntry struct {
 	addr net.IP
+	port string
 	time time.Time
 }
 
@@ -20,6 +21,7 @@ type ipSet struct {
 
 type hostSetEntry struct {
 	addr string
+	port string
 	time time.Time
 }
 
@@ -43,36 +45,36 @@ type routingTable struct {
 	mu    sync.Mutex // for adding / removing entries only, use entry-level locks to edit entries
 }
 
-func (set *ipSet) add(ip net.IP) {
+func (set *ipSet) add(ip net.IP, port string) {
 	set.rw.Lock()
-	set.list = append(set.list, ipSetEntry{ip, time.Now()})
+	set.list = append(set.list, ipSetEntry{ip, port, time.Now()})
 	set.rw.Unlock()
 }
 
-func (set *ipSet) contain(ip net.IP) bool {
+func (set *ipSet) contain(ip net.IP, port string) bool {
 	set.rw.Lock()
 	defer set.rw.Unlock()
 	for i := len(set.list) - 1; i >= 0; i-- {
 		if dur := time.Since(set.list[i].time); dur.Minutes() < -1 || dur > set.timeout {
 			set.list = set.list[i+1:]
 			return false
-		} else if set.list[i].addr.Equal(ip) {
+		} else if set.list[i].addr.Equal(ip) && (set.list[i].port == "" || set.list[i].port == port) {
 			return true
 		}
 	}
 	return false
 }
 
-func (set *hostSet) add(host string) {
+func (set *hostSet) add(host, port string) {
 	if host == "" {
 		return
 	}
 	set.rw.Lock()
-	set.list = append(set.list, hostSetEntry{strings.ToLower(host), time.Now()})
+	set.list = append(set.list, hostSetEntry{strings.ToLower(host), port, time.Now()})
 	set.rw.Unlock()
 }
 
-func (set *hostSet) contain(host string) bool {
+func (set *hostSet) contain(host, port string) bool {
 	set.rw.Lock()
 	defer set.rw.Unlock()
 	lower := strings.ToLower(host)
@@ -80,7 +82,7 @@ func (set *hostSet) contain(host string) bool {
 		if dur := time.Since(set.list[i].time); dur.Minutes() < -1 || dur > set.timeout {
 			set.list = set.list[i+1:]
 			return false
-		} else if set.list[i].addr == lower {
+		} else if set.list[i].addr == lower && (set.list[i].port == "" || set.list[i].port == port) {
 			return true
 		}
 	}
