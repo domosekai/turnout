@@ -720,6 +720,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 		firstResp, err = http.ReadResponse(bufOut, re.firstReq)
 		ttfb = time.Since(sentTime)
 		// Continue reading for a short period of time to detect delayed reset
+		// This is obviously insufficient, need to come up with a better way
 		if err == nil && route == 1 && !re.ruleBased {
 			(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 100))
 			_, err = bufOut.ReadByte()

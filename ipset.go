@@ -154,7 +154,7 @@ func (t *routingTable) addOrLock(key string, matched int) (route, server int, ex
 				// Next line may block
 				entry.mu.Lock()
 				// By this time entry could be already deleted or changed
-				if entry.count == 0 || (entry.failed < 2 && entry.route == matched) {
+				if entry.count == 0 || entry.failed < 2 && (matched == 0 || entry.route == matched) {
 					entry.mu.Unlock()
 					continue
 				}
