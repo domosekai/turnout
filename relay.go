@@ -719,24 +719,15 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 	if lo.mode == "H" && re.firstReq != nil {
 		firstResp, err = http.ReadResponse(bufOut, re.firstReq)
 		ttfb = time.Since(sentTime)
-		// Continue reading for a short period of time to detect delayed reset
-		// This is obviously insufficient, need to come up with a better way
-		if err == nil && route == 1 && !re.ruleBased {
-			(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 100))
-			_, err = bufOut.ReadByte()
-			if err == nil {
-				bufOut.UnreadByte()
-			}
-			if err != nil && strings.Contains(err.Error(), "time") {
-				err = nil
-			}
-		}
 	} else {
 		n, err = bufOut.Read(firstIn)
 		ttfb = time.Since(sentTime)
+		if n > 0 && *verbose {
+			logger.Printf("%s %5d:      *      %d First %d bytes from server. TTFB %d ms.", lo.mode, lo.total, route, n, ttfb.Milliseconds())
+		}
 		// Continue reading for a short period of time to detect delayed reset
 		if err == nil && route == 1 && !re.ruleBased && n > 0 && n < initialSize {
-			(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 100))
+			(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 50))
 			var n1 int
 			n1, err = io.ReadFull(bufOut, firstIn[n:])
 			n += n1
@@ -788,7 +779,6 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 	} else {
 		// If there is response, remove full flag
 		re.firstIsFull = false
-		// Check response validity
 		if lo.mode == "H" && re.firstReq != nil {
 			if *verbose {
 				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms.", lo.total, route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
@@ -801,9 +791,6 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 				return
 			}
 		} else {
-			if *verbose {
-				logger.Printf("%s %5d:      *      %d First %d bytes from server. TTFB %d ms.", lo.mode, lo.total, route, n, ttfb.Milliseconds())
-			}
 			if re.firstReq != nil {
 				if resp, err := readResponseStatus(bufio.NewReader(bytes.NewReader(firstIn[:n]))); err == nil {
 					if *verbose {
