@@ -15,3 +15,4 @@
 //2 8.8.8.8          Select route 2
 //-1 127.0.0.0/8     Destinations with route -1 will be blocked
 //2 ELSE             Special rule matching any unmatched destinations
+//0 17.0.0.0/8       Select route automatically (used with ELSE rule)

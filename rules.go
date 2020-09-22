@@ -64,7 +64,7 @@ func parseIPList(file string) (rules []ipRule) {
 			continue
 		}
 		route, err := strconv.Atoi(r[0])
-		if err != nil || route == 0 {
+		if err != nil {
 			continue
 		}
 		var ipstr string
@@ -111,7 +111,7 @@ func parseHostList(file string) (rules []hostRule) {
 			continue
 		}
 		route, err := strconv.Atoi(r[0])
-		if err != nil || route == 0 {
+		if err != nil {
 			continue
 		}
 		if r[1] == "*" {
@@ -126,7 +126,7 @@ func parseHostList(file string) (rules []hostRule) {
 			continue
 		}
 		if strings.Contains(r[1], "**") {
-			continue
+			log.Fatalf("Invalid host rule: %s", scanner.Text())
 		}
 		b1 := strings.HasPrefix(r[1], "*")
 		b2 := strings.HasSuffix(r[1], "*")
@@ -242,6 +242,9 @@ func findRouteForIP(ip net.IP, rules []ipRule) int { // based on sort.Search()
 		case 1:
 			i = k + 1
 		}
+	}
+	if elseRoute != 0 {
+		return elseRoute
 	}
 	return 0
 }

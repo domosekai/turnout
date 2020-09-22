@@ -220,7 +220,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	}
 	if route < 0 || route > 2 {
 		if *verbose {
-			logger.Printf("%s %5d:  *            Route to %s is blocked", lo.mode, lo.total, lo.key)
+			logger.Printf("%s %5d:  *            Route to %s is invalid or blocked", lo.mode, lo.total, lo.key)
 		}
 		return false
 	}
@@ -1152,9 +1152,6 @@ func matchHost(total int, mode, host, port string) (route int, ruleBased bool) {
 func matchIP(total int, mode string, ip net.IP, port string) (route int, ruleBased bool) {
 	if ipRules != nil {
 		route = findRouteForIP(ip, ipRules)
-		if route == 0 && elseRoute != 0 {
-			route = elseRoute
-		}
 		if route != 0 {
 			if *verbose {
 				logger.Printf("%s %5d: RUL           IP rule matched for %s. Select route %d", mode, total, ip, route)
