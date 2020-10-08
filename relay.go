@@ -24,7 +24,7 @@ const (
 	bufferSize        = 10000 // Not effective if speed detection is disabled (system default buffer size will be used)
 	minSampleInterval = 5     // Due to slow start, this seconds are needed for meaningful speed detection
 	maxSampleInterval = 30
-	minSpeed          = 3 // Speed below this kB/s is likely to have special purpose
+	minSpeed          = 0 // Speed below this kB/s is likely to have special purpose
 	blockSafeTime     = 3 // After this many seconds it is less likely to be reset by firewall
 )
 
@@ -982,9 +982,14 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 					lo.conn.Close()
 					continue
 				}
+				if accumStart.Before(re.lastReq) {
+					accumStart = re.lastReq
+					accum = 0
+				}
 				if resp.ContentLength == -1 && len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked" {
 					cr := newChunkedReader(bufOut)
-					n, bytes, err := cr.copy(lo.conn)
+					n, bytes, err := cr.copyTo(lo, *re, (*out).RemoteAddr(), route, accum)
+					accum += bytes
 					totalBytes += bytes
 					if err == nil || errors.Is(err, io.EOF) {
 						if *verbose {
@@ -1026,10 +1031,6 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 						}
 					}
 				} else if resp.ContentLength != 0 && resp.Request.Method != "HEAD" {
-					if accumStart.Before(re.lastReq) {
-						accumStart = re.lastReq
-						accum = 0
-					}
 					bytes, err := re.writeTo(lo, resp.Body, true, (*out).RemoteAddr(), route, accum)
 					accum += bytes
 					totalBytes += bytes

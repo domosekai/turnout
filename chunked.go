@@ -83,6 +83,30 @@ func (cr *chunkedReader) copy(w net.Conn) (number int, n int64, err error) {
 	return number, n, cr.err
 }
 
+func (cr *chunkedReader) copyTo(lo localConn, re remoteConn, addr net.Addr, route int, lastBytes int64) (number int, n int64, err error) {
+	for cr.err == nil {
+		h := cr.beginChunk()
+		if cr.n > 0 {
+			lo.conn.Write(h)
+			var n0 int64
+			r := io.LimitReader(cr.r, int64(cr.n)+2)
+			n0, cr.err = re.writeTo(lo, r, true, addr, route, lastBytes+n)
+			if errors.Is(cr.err, io.EOF) {
+				cr.err = nil
+			}
+			n += n0 + int64(len(h))
+			cr.n = 0
+			number++
+		}
+		if cr.err == io.EOF {
+			lo.conn.Write(h)
+			n += int64(len(h))
+			return number, n, cr.err
+		}
+	}
+	return number, n, cr.err
+}
+
 // Read a line of bytes (up to \n) from b.
 // Give up if the line exceeds maxLineLength.
 // The returned bytes are owned by the bufio.Reader
