@@ -727,7 +727,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 		}
 		// Continue reading for a short period of time to detect delayed reset
 		if err == nil && route == 1 && !re.ruleBased && n > 0 && n < initialSize {
-			(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 50))
+			(*out).SetReadDeadline(time.Now().Add(time.Millisecond * time.Duration(*firstByteDelay)))
 			var n1 int
 			n1, err = io.ReadFull(bufOut, firstIn[n:])
 			n += n1

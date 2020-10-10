@@ -48,6 +48,7 @@ var dnsOK = flag.Bool("dnsok", false, "Trust system DNS resolver (allowing fast 
 var fastSwitch = flag.Bool("fastswitch", false, "Do not enforce same route to a given destination (may break some websites)")
 var verbose = flag.Bool("verbose", false, "Verbose logging")
 var httpBadStatus = flag.String("badhttp", "", "Drop specified (non-TLS) HTTP response from route 1 (e.g. 403,404,5*)")
+var firstByteDelay = flag.Uint("fbdelay", 0, "Additional delay (ms) applied after first byte is received on route 1")
 var version = "unknown"
 var builddate = "unknown"
 
