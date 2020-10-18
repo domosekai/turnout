@@ -1076,7 +1076,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 					logger.Printf("%s %5d:          *  %d Remote connection closed. Received %d bytes in %.1f s.", lo.mode, lo.total, route, totalBytes, totalTime.Seconds())
 				}
 				//t := time.Since(re.lastReq).Seconds()
-				if route == 1 && !re.ruleBased && re.tls && totalBytes == int64(n) && totalTime.Seconds() > 5 && !re.lastReq.Equal(sentTime) {
+				if route == 1 && !re.ruleBased && re.tls && totalBytes == int64(n) && totalTime.Seconds() > 30 && !re.lastReq.Equal(sentTime) {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 						if lo.host == "" || *dnsOK {
 							logger.Printf("%s %5d:         ADD %d TLS handshake cut off, %s %s port %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP, lo.dport)
