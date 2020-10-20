@@ -21,11 +21,12 @@ import (
 
 const (
 	initialSize       = 10000
-	bufferSize        = 10000 // Not effective if speed detection is disabled (system default buffer size will be used)
-	minSampleInterval = 5     // Due to slow start, this seconds are needed for meaningful speed detection
-	maxSampleInterval = 30
-	minSpeed          = 0 // Speed below this kB/s is likely to have special purpose
-	blockSafeTime     = 3 // After this many seconds it is less likely to be reset by firewall
+	bufferSize        = 4096 // Not effective if speed detection is disabled (system default buffer size will be used)
+	minSampleInterval = 7    // Due to slow start, this seconds are needed for meaningful speed detection
+	maxSampleInterval = 30   // Too long sample period might not mean anything
+	speedRecoveryTime = 120  // Speed recovered to normal within this many seconds will be removed from slow list
+	minSpeed          = 1    // Speed below this kB/s is likely to have special purpose
+	blockSafeTime     = 2    // After this many seconds it is less likely to be reset by firewall
 )
 
 var (
@@ -1133,14 +1134,14 @@ func matchHost(total int, mode, host, port string) (route int, ruleBased bool) {
 			return
 		}
 	}
-	if blockedHostSet.contain(host, port) {
+	if blockedHostSet.find(host, port, false) {
 		route = 2
 		if *verbose {
 			logger.Printf("%s %5d: SET           Host %s port %s found in blocked list. Select route %d", mode, total, host, port, route)
 		}
 		return
 	}
-	if slowHostSet.contain(host, port) {
+	if slowHostSet.find(host, port, false) {
 		route = 2
 		if *verbose {
 			logger.Printf("%s %5d: SET           Host %s port %s found in slow list. Select route %d", mode, total, host, port, route)
@@ -1161,14 +1162,14 @@ func matchIP(total int, mode string, ip net.IP, port string) (route int, ruleBas
 			return
 		}
 	}
-	if blockedIPSet.contain(ip, port) {
+	if blockedIPSet.find(ip, port, false) {
 		route = 2
 		if *verbose {
 			logger.Printf("%s %5d: SET           IP %s port %s found in blocked list. Select route %d", mode, total, ip, port, route)
 		}
 		return
 	}
-	if slowIPSet.contain(ip, port) {
+	if slowIPSet.find(ip, port, false) {
 		route = 2
 		if *verbose {
 			logger.Printf("%s %5d: SET           IP %s port %s found in slow list. Select route %d", mode, total, ip, port, route)
@@ -1181,61 +1182,87 @@ func matchIP(total int, mode string, ip net.IP, port string) (route int, ruleBas
 func (re *remoteConn) writeTo(lo localConn, out io.Reader, single bool, addr net.Addr, route int, lastBytes int64) (bytes int64, err error) {
 	if route == 1 && *slowSpeed > 0 && !re.ruleBased && contain(chkPorts, lo.dport) {
 		var sample int64
-		accum := lastBytes
 		sampleStart := time.Now()
-		accumStart := re.lastReq
+		req := lastBytes
+		reqStart := re.lastReq
+		sessionStart := re.lastReq
 		var slow, added bool
+		detectSpeed := true
+		var timeAdded time.Time
+		var speed, aveSpeed, totalSpeed, reqTime float64
 		for {
 			p := make([]byte, bufferSize)
 			var n int
 			n, err = out.Read(p)
 			bytes += int64(n)
+			d := time.Since(sessionStart)
+			if d > 0 {
+				totalSpeed = float64(bytes) / 1000 / time.Since(sessionStart).Seconds()
+			}
 			if sampleStart.Before(re.lastReq) {
 				sampleStart = re.lastReq
 				sample = 0
 			}
-			if !single && accumStart.Before(re.lastReq) {
-				accumStart = re.lastReq
-				accum = 0
+			if !single && reqStart.Before(re.lastReq) {
+				reqStart = re.lastReq
+				req = 0
 			}
+			t := time.Now()
 			if err == nil {
 				_, err = lo.conn.Write(p[:n])
 			} else if bytes > 0 {
 				lo.conn.Write(p[:n])
 			}
+			d = time.Since(t)
+			sampleStart = sampleStart.Add(d)
+			reqStart = reqStart.Add(d)
 			if err != nil {
 				break
 			}
 			if !added && slow {
-				if tcpAddr := addr.(*net.TCPAddr); tcpAddr != nil {
-					logger.Printf("%s %5d:     SLO     %d %s %s added to slow list", lo.mode, lo.total, route, lo.host, tcpAddr.IP)
-					if !*slowDry {
-						slowIPSet.add(tcpAddr.IP, "")
-						slowHostSet.add(lo.host, "")
-						if *slowClose {
-							lo.conn.Close()
-						}
+				logger.Printf("%s %5d:     SLO     %d Slow connection to %s %s at %.1f kB/s, %.1f kB/s since last request, %.1f kB/s overall", lo.mode, lo.total, route, lo.host, addr, speed, aveSpeed, totalSpeed)
+				if tcpAddr := addr.(*net.TCPAddr); tcpAddr != nil && !*slowDry {
+					slowIPSet.add(tcpAddr.IP, "")
+					slowHostSet.add(lo.host, "")
+					if *slowClose {
+						lo.conn.Close()
 					}
 				}
 				added = true
+				timeAdded = time.Now()
 			}
 			sample += int64(n)
-			accum += int64(n)
-			t := time.Since(sampleStart).Seconds()
+			req += int64(n)
 			// If n = bufferSize, either connection is too fast or client is slow
-			if !slow && t > minSampleInterval && n < bufferSize {
-				speed := float64(sample) / 1000 / t
-				t0 := time.Since(accumStart).Seconds()
-				aveSpeed := float64(accum) / 1000 / t0
-				if t < maxSampleInterval && (aveSpeed < float64(*slowSpeed) || speed < float64(*slowSpeed)*0.3) && aveSpeed > minSpeed && speed > minSpeed {
-					if *verbose {
-						logger.Printf("%s %5d:      *      %d Slow connection to %s %s at %.1f kB/s, average %.1f kB/s since last request %.1f s ago", lo.mode, lo.total, route, lo.host, addr, speed, aveSpeed, t0)
+			if detectSpeed && n < bufferSize {
+				sampleTime := time.Since(sampleStart).Seconds()
+				reqTime = time.Since(reqStart).Seconds()
+				if sampleTime > 0 && reqTime > 0 {
+					speed = float64(sample) / 1000 / sampleTime
+					aveSpeed = float64(req) / 1000 / reqTime
+					if sampleTime > minSampleInterval {
+						if !slow && sampleTime < maxSampleInterval {
+							if (totalSpeed < float64(*slowSpeed) && aveSpeed < float64(*slowSpeed) && speed < float64(*slowSpeed) || speed < float64(*slowSpeed)*0.3) && (aveSpeed > minSpeed || speed > minSpeed) {
+								// Set flag to add to list only if this read is not the final one
+								slow = true
+							}
+						}
+						sampleStart = time.Now()
+						sample = 0
 					}
-					// Set flag to add to list only if this read is not the final one
-					slow = true
+					if slow && reqTime > 0.2 && aveSpeed > float64(*slowSpeed)*1.2 && speed > float64(*slowSpeed) {
+						logger.Printf("%s %5d:     SLO     %d Speed to %s %s recovered to %.1f kB/s, %.1f kB/s since last request, %.1f kB/s overall", lo.mode, lo.total, route, lo.host, addr, speed, aveSpeed, totalSpeed)
+						slow = false
+						added = false
+						if tcpAddr := addr.(*net.TCPAddr); tcpAddr != nil && !*slowDry {
+							slowIPSet.find(tcpAddr.IP, "", true)
+							slowHostSet.find(lo.host, "", true)
+						}
+					}
+					if added && time.Since(timeAdded).Seconds() > speedRecoveryTime {
+						detectSpeed = false
+					}
 				}
-				sampleStart = time.Now()
-				sample = 0
 			}
 		}
 	} else {

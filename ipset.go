@@ -8,9 +8,10 @@ import (
 )
 
 type ipSetEntry struct {
-	addr net.IP
-	port string
-	time time.Time
+	addr    net.IP
+	port    string
+	time    time.Time
+	enabled bool
 }
 
 type ipSet struct {
@@ -20,9 +21,10 @@ type ipSet struct {
 }
 
 type hostSetEntry struct {
-	addr string
-	port string
-	time time.Time
+	addr    string
+	port    string
+	time    time.Time
+	enabled bool
 }
 
 type hostSet struct {
@@ -47,11 +49,11 @@ type routingTable struct {
 
 func (set *ipSet) add(ip net.IP, port string) {
 	set.rw.Lock()
-	set.list = append(set.list, ipSetEntry{ip, port, time.Now()})
+	set.list = append(set.list, ipSetEntry{ip, port, time.Now(), true})
 	set.rw.Unlock()
 }
 
-func (set *ipSet) contain(ip net.IP, port string) bool {
+func (set *ipSet) find(ip net.IP, port string, del bool) bool {
 	set.rw.Lock()
 	defer set.rw.Unlock()
 	for i := len(set.list) - 1; i >= 0; i-- {
@@ -59,7 +61,12 @@ func (set *ipSet) contain(ip net.IP, port string) bool {
 			set.list = set.list[i+1:]
 			return false
 		} else if set.list[i].addr.Equal(ip) && (set.list[i].port == "" || set.list[i].port == port) {
-			return true
+			if !del && set.list[i].enabled {
+				return true
+			}
+			if del && set.list[i].enabled {
+				set.list[i].enabled = false
+			}
 		}
 	}
 	return false
@@ -70,11 +77,11 @@ func (set *hostSet) add(host, port string) {
 		return
 	}
 	set.rw.Lock()
-	set.list = append(set.list, hostSetEntry{strings.ToLower(host), port, time.Now()})
+	set.list = append(set.list, hostSetEntry{strings.ToLower(host), port, time.Now(), true})
 	set.rw.Unlock()
 }
 
-func (set *hostSet) contain(host, port string) bool {
+func (set *hostSet) find(host, port string, del bool) bool {
 	set.rw.Lock()
 	defer set.rw.Unlock()
 	lower := strings.ToLower(host)
@@ -83,7 +90,12 @@ func (set *hostSet) contain(host, port string) bool {
 			set.list = set.list[i+1:]
 			return false
 		} else if set.list[i].addr == lower && (set.list[i].port == "" || set.list[i].port == port) {
-			return true
+			if !del && set.list[i].enabled {
+				return true
+			}
+			if del && set.list[i].enabled {
+				set.list[i].enabled = false
+			}
 		}
 	}
 	return false
