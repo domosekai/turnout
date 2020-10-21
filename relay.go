@@ -25,7 +25,7 @@ const (
 	minSampleInterval = 7    // Due to slow start, this seconds are needed for meaningful speed detection
 	maxSampleInterval = 30   // Too long sample period might not mean anything
 	speedRecoveryTime = 120  // Speed recovered to normal within this many seconds will be removed from slow list
-	minSpeed          = 1    // Speed below this kB/s is likely to have special purpose
+	minSpeed          = 1    // Average speed below this kB/s is likely to have special purpose
 	blockSafeTime     = 2    // After this many seconds it is less likely to be reset by firewall
 )
 
@@ -1242,7 +1242,7 @@ func (re *remoteConn) writeTo(lo localConn, out io.Reader, single bool, addr net
 					aveSpeed = float64(req) / 1000 / reqTime
 					if sampleTime > minSampleInterval {
 						if !slow && sampleTime < maxSampleInterval {
-							if (totalSpeed < float64(*slowSpeed) && aveSpeed < float64(*slowSpeed) && speed < float64(*slowSpeed) || speed < float64(*slowSpeed)*0.3) && (aveSpeed > minSpeed || speed > minSpeed) {
+							if (totalSpeed < float64(*slowSpeed) && aveSpeed < float64(*slowSpeed) && speed < float64(*slowSpeed) || speed < float64(*slowSpeed)*0.3) && aveSpeed > minSpeed && totalSpeed > minSpeed {
 								// Set flag to add to list only if this read is not the final one
 								slow = true
 							}
