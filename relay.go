@@ -533,6 +533,9 @@ func (re *remoteConn) relayLocalFor(lo localConn) {
 		if *verbose {
 			logger.Printf("%s %5d:          *    Local connection reset. Sent %d bytes.", lo.mode, lo.total, totalBytes)
 		}
+		if tcp, ok := (*re.conn).(*net.TCPConn); ok {
+			tcp.SetLinger(0)
+		}
 	} else {
 		if *verbose {
 			logger.Printf("%s %5d:         ERR   Local connection closed. Sent %d bytes. Error: %s", lo.mode, lo.total, totalBytes, err)
@@ -649,9 +652,6 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 		try <- 0
 		return
 	}
-	/*if tcp, ok := (*out).(*net.TCPConn); ok {
-		tcp.SetLinger(0)
-	}*/
 	if *verbose {
 		logger.Printf("%s %5d:  *          %d TCP connection established", lo.mode, lo.total, route)
 	}
@@ -933,6 +933,9 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 									blockedHostSet.add(lo.host, lo.dport)
 								}
 							}
+							if tcp, ok := lo.conn.(*net.TCPConn); ok {
+								tcp.SetLinger(0)
+							}
 						} else {
 							if *verbose {
 								logger.Printf("H %5d:         ERR %d Remote connection closed. Received %d bytes in %.1f s. Error: %s", lo.total, route, totalBytes, totalTime.Seconds(), err)
@@ -1009,6 +1012,9 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 									blockedHostSet.add(lo.host, lo.dport)
 								}
 							}
+							if tcp, ok := lo.conn.(*net.TCPConn); ok {
+								tcp.SetLinger(0)
+							}
 						} else {
 							if *verbose {
 								logger.Printf("H %5d:     ERR     %d Parsed %d chunks and %d bytes but failed to write to client. Error: %s", lo.total, route, n, bytes, err)
@@ -1050,6 +1056,9 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 									blockedIPSet.add(tcpAddr.IP, lo.dport)
 									blockedHostSet.add(lo.host, lo.dport)
 								}
+							}
+							if tcp, ok := lo.conn.(*net.TCPConn); ok {
+								tcp.SetLinger(0)
 							}
 						} else {
 							if *verbose {
@@ -1109,6 +1118,9 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 						}
 						blockedHostSet.add(lo.host, lo.dport)
 					}
+				}
+				if tcp, ok := lo.conn.(*net.TCPConn); ok {
+					tcp.SetLinger(0)
 				}
 			} else {
 				if *verbose {

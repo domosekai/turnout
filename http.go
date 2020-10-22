@@ -83,6 +83,9 @@ func (lo *localConn) handleHTTP() {
 				if *verbose {
 					logger.Printf("H %5d:          *    Local connection reset. Sent %d bytes.", lo.total, totalBytes)
 				}
+				if tcp, ok := (*re.conn).(*net.TCPConn); ok {
+					tcp.SetLinger(0)
+				}
 			} else if strings.Contains(err.Error(), "malformed") {
 				if *verbose {
 					logger.Printf("H %5d:         ERR   Local connection closed due to bad HTTP request. Sent %d bytes. Error: %s", lo.total, totalBytes, err)
