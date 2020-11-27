@@ -631,7 +631,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 			if *verbose {
 				logger.Printf("%s %5d: RST         %d Initial connection reset", lo.mode, lo.total, route)
 			}
-			if route == 1 && !re.ruleBased {
+			/*if route == 1 && !re.ruleBased {
 				if ip := net.ParseIP(lo.dest); ip != nil && (lo.host == "" || *dnsOK) {
 					logger.Printf("%s %5d: ADD         %d TCP reset detected, %s %s port %s added to blocked list", lo.mode, lo.total, route, lo.host, ip, lo.dport)
 					blockedIPSet.add(ip, lo.dport)
@@ -639,7 +639,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 					logger.Printf("%s %5d: ADD         %d TCP reset detected, %s port %s added to blocked list", lo.mode, lo.total, route, lo.host, lo.dport)
 				}
 				blockedHostSet.add(lo.host, lo.dport)
-			}
+			}*/
 		} else if strings.Contains(err.Error(), "no such host") {
 			if *verbose {
 				logger.Printf("%s %5d: NXD         %d Domain lookup failed", lo.mode, lo.total, route)
@@ -746,7 +746,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 				if *verbose {
 					logger.Printf("%s %5d:     RST     %d First byte reset", lo.mode, lo.total, route)
 				}
-				if route == 1 && !re.ruleBased {
+				/*if route == 1 && !re.ruleBased {
 					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 						if lo.host == "" || *dnsOK {
 							logger.Printf("%s %5d:     ADD     %d TCP reset detected, %s %s port %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP, lo.dport)
@@ -756,7 +756,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 						}
 						blockedHostSet.add(lo.host, lo.dport)
 					}
-				}
+				}*/
 			} else if strings.Contains(err.Error(), "time") {
 				if *verbose {
 					logger.Printf("%s %5d:     PSH     %d First byte timeout", lo.mode, lo.total, route)
