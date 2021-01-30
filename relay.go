@@ -219,7 +219,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			route, re.ruleBased = matchHost(lo.total, lo.mode, lo.dest, lo.dport)
 		}
 	}
-	if route < 0 || route > 2 {
+	if route < 0 || route > 3 {
 		if *verbose {
 			logger.Printf("%s %5d:  *            Route to %s is invalid or blocked", lo.mode, lo.total, lo.key)
 		}
@@ -255,15 +255,24 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		totalTimeout += int(*r1Timeout)
 		available1 = 1
 	}
-	if route == 0 || route == 2 {
+	if route == 0 || route == 2 || route == 3 {
 		if server == 0 {
-			for i, v := range socks {
-				go re.handleRemote(lo, &out2[i], net2, int(*r2Timeout), 2, i+1, start[v.pri], try2, do2, stop2)
+			if route == 3 {
+				s := len(socks)
+				go re.handleRemote(lo, &out2[s-1], net2, int(*r2Timeout), 3, s, start[1], try2, do2, stop2)
 				totalTimeout += int(*r2Timeout)
+				available2 = 1
+			} else {
+				for i, v := range socks {
+					if v.pri != 0 {
+						go re.handleRemote(lo, &out2[i], net2, int(*r2Timeout), 2, i+1, start[v.pri], try2, do2, stop2)
+						totalTimeout += int(*r2Timeout)
+						available2++
+					}
+				}
 			}
-			available2 = len(socks)
 		} else {
-			go re.handleRemote(lo, &out2[server-1], net2, int(*r2Timeout), 2, server, start[1], try2, do2, stop2)
+			go re.handleRemote(lo, &out2[server-1], net2, int(*r2Timeout), route, server, start[1], try2, do2, stop2)
 			totalTimeout += int(*r2Timeout)
 			available2 = 1
 		}
@@ -289,6 +298,8 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		} else {
 			start[1] <- true
 		}
+	case 3:
+		start[1] <- true
 	}
 
 	// Wait for first byte from server
@@ -378,22 +389,28 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			if ok2 > 0 && available2 > 0 && server2 == 0 {
 				server2 = ok2
 				if available1 == 0 {
+					var r int
+					if route == 3 {
+						r = 3
+					} else {
+						r = 2
+					}
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:     NEW     2 Save new route to %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:     NEW     %d Save new route to %s", lo.mode, lo.total, r, lo.key)
 							}
-							entry.save(2, server2)
+							entry.save(r, server2)
 						} else {
-							if entry.reset(2, server2) {
+							if entry.reset(r, server2) {
 								if *verbose {
-									logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
+									logger.Printf("%s %5d:      *      %d Reset counter for %s", lo.mode, lo.total, r, lo.key)
 								}
 							}
 						}
 					}
 					do2 <- server2
-					re.route = 2
+					re.route = r
 					re.conn = &out2[server2-1]
 					re.server = server2
 					return true
@@ -447,7 +464,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 							logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
 							rt.unlock(lo.key, entry)
 						} else {
-							logger.Printf("%s %5d:     ERR     2 Existing route to %s failed", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, route, lo.key)
 							rt.del(lo.key, false, route, server)
 						}
 					} else {

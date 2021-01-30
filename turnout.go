@@ -25,6 +25,7 @@ var httpAddr = flag.String("h", "", "Listening address and port for HTTP proxy (
 var socksAddr = flag.String("s", "", "Priority 1 SOCKS5 server(s) for route 2. Multiple servers will be attempted simultaneously to find the fastest route. Use s2 and s3 if you need fail-over only. (e.g. 127.0.0.1:1080,127.0.0.1:1081)")
 var socksAddr2 = flag.String("s2", "", "Priority 2 SOCKS5 server(s) for route 2. These servers will only be used if priority 1 servers have failed.")
 var socksAddr3 = flag.String("s3", "", "Priority 3 SOCKS5 server(s) for route 2. These servers will only be used if priority 2 servers have failed.")
+var specialAddr = flag.String("p", "", "Special SOCKS5 server(s) for route 3. These servers will only be used for specified destinations.")
 
 //var ifname2 = flag.String("if", "", "Network interface for secondary route (e.g. eth1, wlan1)")
 //var dns2Addr = flag.String("dns", "8.8.8.8:53", "DNS nameserver for the secondary interface (no need for SOCKS) (e.g. 8.8.8.8)")
@@ -86,10 +87,10 @@ var (
 	logger   *log.Logger
 	wg       sync.WaitGroup
 	mu       sync.Mutex
-	open     [3]int // open connections
-	jobs     [3]int // working goroutines
-	sent     [3]int64
-	received [3]int64
+	open     [4]int // open connections
+	jobs     [4]int // working goroutines
+	sent     [4]int64
+	received [4]int64
 	socks    []server
 	priority [4][]int
 	chkPorts []string
@@ -154,6 +155,7 @@ func main() {
 	if parseSOCKS(*socksAddr2, 2) > 0 {
 		parseSOCKS(*socksAddr3, 3)
 	}
+	parseSOCKS(*specialAddr, 0)
 	/*if *ifname2 != "" {
 		if _, err := net.InterfaceByName(*ifname2); err != nil {
 			log.Fatalf("Invalid interface name %s", *ifname2)
@@ -204,11 +206,11 @@ func main() {
 		go func() {
 			c := time.Tick(time.Minute * time.Duration(*tickInterval))
 			for range c {
-				logger.Printf("STATUS Open connections per route: Local %d Remote %d / %d", open[0], open[1], open[2])
-				logger.Printf("STATUS Route 1 Sent %.1f MB Recv %.1f MB / Route 2 Sent %.1f MB Recv %.1f MB",
-					float64(sent[1])/1000000, float64(received[1])/1000000, float64(sent[2])/1000000, float64(received[2])/1000000)
+				logger.Printf("STATUS Open connections per route: Local %d Remote %d / %d Special %d", open[0], open[1], open[2], open[3])
+				logger.Printf("STATUS Route 1 Sent %.1f MB Recv %.1f MB / Route 2 Sent %.1f MB Recv %.1f MB / Special Sent %.1f MB Recv %.1f MB",
+					float64(sent[1])/1000000, float64(received[1])/1000000, float64(sent[2])/1000000, float64(received[2])/1000000, float64(sent[3])/1000000, float64(received[3])/1000000)
 				if *verbose {
-					logger.Printf("STATUS Routing entries: %d Active dispatchers: %d Workers per route: %d / %d", rt.count, jobs[0], jobs[1], jobs[2])
+					logger.Printf("STATUS Routing entries: %d Active dispatchers: %d Workers per route: %d / %d / %d", rt.count, jobs[0], jobs[1], jobs[2], jobs[3])
 				}
 			}
 		}()
@@ -244,10 +246,13 @@ func parseSOCKS(str string, pri int) int {
 	for _, s := range strings.Split(str, ",") {
 		if s0, ok := parseAddr(s, false); !ok {
 			log.Fatalf("Invalid SOCKS5 proxy address %s", s)
-		} else {
+		} else if pri > 0 {
 			logger.Printf("SOCKS5 server %s (Priority %d)", s0, pri)
 			socks = append(socks, server{s0, pri})
 			priority[pri] = append(priority[pri], len(socks)-1)
+		} else {
+			logger.Printf("Special SOCKS5 server %s", s0)
+			socks = append(socks, server{s0, pri})
 		}
 	}
 	return len(priority[pri])
