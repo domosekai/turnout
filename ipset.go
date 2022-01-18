@@ -72,6 +72,12 @@ func (set *ipSet) find(ip net.IP, port string, del bool) bool {
 	return false
 }
 
+func (set *ipSet) clear() {
+	set.rw.Lock()
+	set.list = nil
+	set.rw.Unlock()
+}
+
 func (set *hostSet) add(host, port string) {
 	if host == "" {
 		return
@@ -99,6 +105,12 @@ func (set *hostSet) find(host, port string, del bool) bool {
 		}
 	}
 	return false
+}
+
+func (set *hostSet) clear() {
+	set.rw.Lock()
+	set.list = nil
+	set.rw.Unlock()
 }
 
 // Unlock and save or update new route

@@ -801,7 +801,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 			if *verbose {
 				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms.", lo.total, route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
 			}
-			if route == 1 && !re.ruleBased && findRouteForText(firstResp.Status, httpRules, false) == 2 {
+			if route == 1 && !re.ruleBased && httpRules.findRouteForText(firstResp.Status, false) == 2 {
 				if *verbose {
 					logger.Printf("%s %5d:      *      %d HTTP status in blocklist", lo.mode, lo.total, route)
 				}
@@ -814,7 +814,7 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 					if *verbose {
 						logger.Printf("%s %5d:      *      %d HTTP Status %s", lo.mode, lo.total, route, resp.Status)
 					}
-					if route == 1 && !re.ruleBased && findRouteForText(resp.Status, httpRules, false) == 2 {
+					if route == 1 && !re.ruleBased && httpRules.findRouteForText(resp.Status, false) == 2 {
 						if *verbose {
 							logger.Printf("%s %5d:      *      %d HTTP status in blocklist", lo.mode, lo.total, route)
 						}
@@ -1153,8 +1153,8 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 }
 
 func matchHost(total int, mode, host, port string) (route int, ruleBased bool) {
-	if hostRules != nil {
-		route = findRouteForText(host, hostRules, true)
+	if hostRules.rules != nil {
+		route = hostRules.findRouteForText(host, true)
 		if route != 0 {
 			if *verbose {
 				logger.Printf("%s %5d: RUL           Host rule matched for %s. Select route %d", mode, total, host, route)
@@ -1181,8 +1181,8 @@ func matchHost(total int, mode, host, port string) (route int, ruleBased bool) {
 }
 
 func matchIP(total int, mode string, ip net.IP, port string) (route int, ruleBased bool) {
-	if ipRules != nil {
-		route = findRouteForIP(ip, ipRules)
+	if ipRules.rules != nil {
+		route = ipRules.findRouteForIP(ip)
 		if route != 0 {
 			if *verbose {
 				logger.Printf("%s %5d: RUL           IP rule matched for %s. Select route %d", mode, total, ip, route)

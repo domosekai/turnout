@@ -13,10 +13,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -170,26 +171,13 @@ func main() {
 		}
 	}*/
 	if *ipFile != "" {
-		ipRules = parseIPList(*ipFile)
-		if ipRules != nil {
-			logger.Printf("Loaded %d IP rules", len(ipRules))
-			sort.Sort(byByte(ipRules))
-		}
-		if elseRoute != 0 {
-			logger.Printf("Unmatched IPs will use route %d", elseRoute)
-		}
+		readIPRules(&ipRules, *ipFile)
 	}
 	if *hostFile != "" {
-		hostRules = parseHostList(*hostFile)
-		if hostRules != nil {
-			logger.Printf("Loaded %d host rules", len(hostRules))
-		}
+		readHostRules(&hostRules, *hostFile)
 	}
 	if *httpBadStatus != "" {
-		httpRules = parseHTTPRules(*httpBadStatus)
-		if httpRules != nil {
-			logger.Printf("Loaded %d HTTP rules", len(httpRules))
-		}
+		readHTTPRules(&httpRules, *httpBadStatus)
 	}
 	if strings.ContainsAny(*speedPorts, "0123456789") {
 		chkPorts = strings.Split(strings.Trim(*speedPorts, ","), ",")
@@ -200,6 +188,28 @@ func main() {
 	slowHostSet.timeout = time.Minute * time.Duration(*slowTimeout)
 	blockedIPSet.timeout = time.Minute * time.Duration(*blockedTimeout)
 	blockedHostSet.timeout = time.Minute * time.Duration(*blockedTimeout)
+
+	// Listen for signal to clear cache and re-read rules
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGHUP)
+	go func() {
+		for range sigs {
+			logger.Println("Received signal to reload files and clear cache")
+			if *ipFile != "" {
+				readIPRules(&ipRules, *ipFile)
+			}
+			if *hostFile != "" {
+				readHostRules(&hostRules, *hostFile)
+			}
+			slowIPSet.clear()
+			slowHostSet.clear()
+			blockedIPSet.clear()
+			blockedHostSet.clear()
+			logger.Println("Slow and blocked lists flushed")
+		}
+	}()
+
+	// Main process
 	total := 0
 	dispatch(&total)
 	if *tickInterval > 0 {

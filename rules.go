@@ -10,13 +10,21 @@ import (
 	"log"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type ipRule struct {
 	ipnet6 net.IPNet
 	route  int
+}
+
+type ipRuleList struct {
+	rules     []ipRule
+	elseRoute int
+	rw        sync.RWMutex
 }
 
 type hostRule struct {
@@ -29,11 +37,15 @@ type hostRule struct {
 	route  int
 }
 
+type hostRuleList struct {
+	rules []hostRule
+	rw    sync.RWMutex
+}
+
 var (
-	ipRules   []ipRule
-	hostRules []hostRule
-	httpRules []hostRule
-	elseRoute int
+	ipRules   ipRuleList
+	hostRules hostRuleList
+	httpRules hostRuleList
 )
 
 type byByte []ipRule
@@ -51,12 +63,16 @@ func (n byByte) Less(i, j int) bool {
 }
 func (n byByte) Swap(i, j int) { n[i], n[j] = n[j], n[i] }
 
-func parseIPList(file string) (rules []ipRule) {
+func (list *ipRuleList) parseIPList(file string) {
 	f, err := os.Open(file)
 	if err != nil {
 		log.Fatalln(err)
 	}
 	defer f.Close()
+	list.rw.Lock()
+	defer list.rw.Unlock()
+	list.rules = nil
+	list.elseRoute = 0
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		r := strings.Split(scanner.Text(), " ")
@@ -69,7 +85,7 @@ func parseIPList(file string) (rules []ipRule) {
 		}
 		var ipstr string
 		if r[1] == "ELSE" {
-			elseRoute = route
+			list.elseRoute = route
 			continue
 		}
 		if !strings.Contains(r[1], "/") {
@@ -89,21 +105,23 @@ func parseIPList(file string) (rules []ipRule) {
 		} else {
 			switch len(ipnet.Mask) {
 			case net.IPv4len:
-				rules = append(rules, ipRule{net.IPNet{IP: ipnet.IP.To16(), Mask: mark4to6(ipnet.Mask)}, route})
+				list.rules = append(list.rules, ipRule{net.IPNet{IP: ipnet.IP.To16(), Mask: mark4to6(ipnet.Mask)}, route})
 			case net.IPv6len:
-				rules = append(rules, ipRule{*ipnet, route})
+				list.rules = append(list.rules, ipRule{*ipnet, route})
 			}
 		}
 	}
-	return
 }
 
-func parseHostList(file string) (rules []hostRule) {
+func (list *hostRuleList) parseHostList(file string) {
 	f, err := os.Open(file)
 	if err != nil {
 		log.Fatalln(err)
 	}
 	defer f.Close()
+	list.rw.Lock()
+	defer list.rw.Unlock()
+	list.rules = nil
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		r := strings.Split(scanner.Text(), " ")
@@ -115,13 +133,13 @@ func parseHostList(file string) (rules []hostRule) {
 			continue
 		}
 		if r[1] == "*" {
-			rules = append(rules, hostRule{any: true, route: route})
+			list.rules = append(list.rules, hostRule{any: true, route: route})
 			continue
 		}
 		if strings.HasPrefix(r[1], "\"") && strings.HasSuffix(r[1], "\"") {
 			d := strings.TrimSuffix(strings.TrimPrefix(r[1], "\""), "\"")
 			if d != "" {
-				rules = append(rules, hostRule{exact: strings.ToLower(d), route: route})
+				list.rules = append(list.rules, hostRule{exact: strings.ToLower(d), route: route})
 			}
 			continue
 		}
@@ -134,42 +152,44 @@ func parseHostList(file string) (rules []hostRule) {
 		switch len(parts) {
 		case 1:
 			if b1 && b2 {
-				rules = append(rules, hostRule{middle: strings.ToLower(parts[0]), route: route})
+				list.rules = append(list.rules, hostRule{middle: strings.ToLower(parts[0]), route: route})
 			} else if b1 && !b2 {
-				rules = append(rules, hostRule{right: strings.ToLower(parts[0]), route: route})
+				list.rules = append(list.rules, hostRule{right: strings.ToLower(parts[0]), route: route})
 			} else if !b1 && b2 {
-				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), route: route})
+				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), route: route})
 			} else {
 				// Treat as dnsmasq-style domain if no wildcard
-				rules = append(rules, hostRule{domain: strings.ToLower(parts[0]), route: route})
+				list.rules = append(list.rules, hostRule{domain: strings.ToLower(parts[0]), route: route})
 			}
 		case 2:
 			if b1 && !b2 {
-				rules = append(rules, hostRule{middle: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), route: route})
+				list.rules = append(list.rules, hostRule{middle: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), route: route})
 			} else if !b1 && b2 {
-				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), route: route})
+				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), route: route})
 			} else if !b1 && !b2 {
-				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), route: route})
+				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), route: route})
 			}
 		case 3:
 			if !b1 && !b2 {
-				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), right: strings.ToLower(parts[2]), route: route})
+				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), right: strings.ToLower(parts[2]), route: route})
 			}
 		default:
 			log.Fatalf("Invalid host rule: %s", scanner.Text())
 		}
 	}
-	return
 }
 
-func parseHTTPRules(str string) (rules []hostRule) {
+func (list *hostRuleList) parseHTTPRules(str string) {
+	list.rw.Lock()
+	defer list.rw.Unlock()
+	list.rules = nil
 	for _, s := range strings.Split(str, ",") {
 		s = strings.TrimSpace(s)
 		if s == "" {
 			continue
 		}
 		if s == "*" {
-			rules = append(rules, hostRule{any: true, route: 2})
+			list.rules = append(list.rules, hostRule{any: true, route: 2})
 			continue
 		}
 		if strings.Contains(s, "**") {
@@ -181,30 +201,29 @@ func parseHTTPRules(str string) (rules []hostRule) {
 		switch len(parts) {
 		case 1:
 			if b1 && b2 {
-				rules = append(rules, hostRule{middle: strings.ToLower(parts[0]), route: 2})
+				list.rules = append(list.rules, hostRule{middle: strings.ToLower(parts[0]), route: 2})
 			} else if b1 && !b2 {
-				rules = append(rules, hostRule{right: strings.ToLower(parts[0]), route: 2})
+				list.rules = append(list.rules, hostRule{right: strings.ToLower(parts[0]), route: 2})
 			} else {
 				// Assume no asterisk as left match
-				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), route: 2})
+				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), route: 2})
 			}
 		case 2:
 			if b1 && !b2 {
-				rules = append(rules, hostRule{middle: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), route: 2})
+				list.rules = append(list.rules, hostRule{middle: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), route: 2})
 			} else if !b1 && b2 {
-				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), route: 2})
+				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), route: 2})
 			} else if !b1 && !b2 {
-				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), route: 2})
+				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), route: 2})
 			}
 		case 3:
 			if !b1 && !b2 {
-				rules = append(rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), right: strings.ToLower(parts[2]), route: 2})
+				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), right: strings.ToLower(parts[2]), route: 2})
 			}
 		default:
 			log.Fatalf("Invalid HTTP rule: %s", s)
 		}
 	}
-	return
 }
 
 func mark4to6(mark net.IPMask) net.IPMask {
@@ -229,34 +248,32 @@ func cmpIPIPNet6(ip net.IP, ipnet net.IPNet) int { // based on net.Contains()
 	return 0
 }
 
-func findRouteForIP(ip net.IP, rules []ipRule) int { // based on sort.Search()
-	if rules == nil {
-		return 0
-	}
-	for i, j := 0, len(rules); i < j; {
-		switch k := int(uint(i+j) >> 1); cmpIPIPNet6(ip.To16(), rules[k].ipnet6) { // i <= k < j
+func (list *ipRuleList) findRouteForIP(ip net.IP) int { // based on sort.Search()
+	list.rw.RLock()
+	defer list.rw.RUnlock()
+	for i, j := 0, len(list.rules); i < j; {
+		switch k := int(uint(i+j) >> 1); cmpIPIPNet6(ip.To16(), list.rules[k].ipnet6) { // i <= k < j
 		case -1:
 			j = k
 		case 0:
-			return rules[k].route
+			return list.rules[k].route
 		case 1:
 			i = k + 1
 		}
 	}
-	if elseRoute != 0 {
-		return elseRoute
+	if list.elseRoute != 0 {
+		return list.elseRoute
 	}
 	return 0
 }
 
-func findRouteForText(text string, rules []hostRule, ignoreCase bool) int {
-	if rules == nil {
-		return 0
-	}
+func (list *hostRuleList) findRouteForText(text string, ignoreCase bool) int {
+	list.rw.RLock()
+	defer list.rw.RUnlock()
 	if ignoreCase {
 		text = strings.ToLower(text)
 	}
-	for _, v := range rules {
+	for _, v := range list.rules {
 		if v.any {
 			return v.route
 		}
@@ -295,4 +312,35 @@ func findRouteForText(text string, rules []hostRule, ignoreCase bool) int {
 		return v.route
 	}
 	return 0
+}
+
+func readIPRules(list *ipRuleList, file string) {
+	list.parseIPList(file)
+	list.rw.RLock()
+	if list.rules != nil {
+		logger.Printf("Loaded %d IP rules", len(list.rules))
+		sort.Sort(byByte(list.rules))
+	}
+	if list.elseRoute != 0 {
+		logger.Printf("Unmatched IPs will use route %d", list.elseRoute)
+	}
+	list.rw.RUnlock()
+}
+
+func readHostRules(list *hostRuleList, file string) {
+	list.parseHostList(file)
+	list.rw.RLock()
+	if list.rules != nil {
+		logger.Printf("Loaded %d host rules", len(list.rules))
+	}
+	list.rw.RUnlock()
+}
+
+func readHTTPRules(list *hostRuleList, str string) {
+	list.parseHTTPRules(str)
+	list.rw.RLock()
+	if list.rules != nil {
+		logger.Printf("Loaded %d HTTP rules", len(list.rules))
+	}
+	list.rw.RUnlock()
 }

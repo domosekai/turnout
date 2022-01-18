@@ -1,7 +1,7 @@
 // Released under MIT License
 // Copyright (c) 2020 domosekai
 
-// +build !linux
+//go:build !linux
 
 package main
 
