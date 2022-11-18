@@ -261,6 +261,8 @@ func parseProxy(str string, pri int) int {
 		}
 		if addr, err := url.Parse(s); err != nil {
 			log.Fatalf("Invalid proxy %s: %s", s, err)
+		} else if addr.Port() == "" {
+			log.Fatalf("Port number is missing: %s", s)
 		} else {
 			addr.Scheme = strings.ToLower(addr.Scheme)
 			switch addr.Scheme {
