@@ -3,7 +3,7 @@
 // This program was designed to select routes automatically.
 // You are encouraged to install as few custom rules as possible.
 
-// If a hostname is available it is passed to the SOCKS5 proxy and resolved by the proxy in some way Turnout does not know.
+// If a hostname is available it is passed to and resolved by the proxy in some way Turnout does not know.
 // Therefore the routing decision Turnout makes is based solely on the result from the system resolver.
 // If the system resolver may provide bogus result, you need to take that into consideration when writing rules.
 

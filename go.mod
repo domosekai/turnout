@@ -3,8 +3,9 @@ module turnout
 go 1.17
 
 require (
-	golang.org/x/crypto v0.0.0-20220112180741-5e0467b6c7ce
-	golang.org/x/net v0.0.0-20220114011407-0dd24b26b47d
+	github.com/mwitkow/go-http-dialer v0.0.0-20161116154839-378f744fb2b8
+	golang.org/x/crypto v0.3.0
+	golang.org/x/net v0.2.0
 )
 
-require golang.org/x/text v0.3.7 // indirect
+require golang.org/x/text v0.4.0 // indirect

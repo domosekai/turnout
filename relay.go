@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	http_dialer "github.com/mwitkow/go-http-dialer"
 	"golang.org/x/net/proxy"
 )
 
@@ -193,12 +194,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		start[i] = make(chan bool)
 	}
 	try1 := make(chan int, 1)
-	try2 := make(chan int, len(socks))
+	try2 := make(chan int, len(proxies))
 	stop2 := make(chan bool, 1)
 	do1 := make(chan int, 1)
 	do2 := make(chan int, 1)
 	var out1 net.Conn
-	out2 := make([]net.Conn, len(socks))
+	out2 := make([]net.Conn, len(proxies))
 	ok1, ok2 := -1, -1
 	var available1, available2 int
 
@@ -258,12 +259,12 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	if route == 0 || route == 2 || route == 3 {
 		if server == 0 {
 			if route == 3 {
-				s := len(socks)
+				s := len(proxies)
 				go re.handleRemote(lo, &out2[s-1], net2, int(*r2Timeout), 3, s, start[1], try2, do2, stop2)
 				totalTimeout += int(*r2Timeout)
 				available2 = 1
 			} else {
-				for i, v := range socks {
+				for i, v := range proxies {
 					if v.pri != 0 {
 						go re.handleRemote(lo, &out2[i], net2, int(*r2Timeout), 2, i+1, start[v.pri], try2, do2, stop2)
 						totalTimeout += int(*r2Timeout)
@@ -587,17 +588,47 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 			logger.Printf("%s %5d:  *          %d Dialing to %s %s", lo.mode, lo.total, route, network, dp)
 		}
 		*out, err = net.DialTimeout(network, dp, time.Second*time.Duration(timeout))
-	} else {
-		dialer, err1 := proxy.SOCKS5("tcp", socks[server-1].addr, nil, &net.Dialer{Timeout: time.Second * time.Duration(timeout)})
-		if err1 != nil {
-			logger.Printf("%s %5d: ERR         %d Failed to dial SOCKS server %s. Error: %s", lo.mode, lo.total, route, socks[server-1].addr, err)
+	} else if proxies[server-1].addr.Scheme == "socks5" {
+		// SOCKS5
+		server := proxies[server-1]
+		// URL.Host is hostname:port
+		addr := server.addr.Host
+		var dialer proxy.Dialer
+		var auth *proxy.Auth
+		if server.addr.User != nil {
+			auth = new(proxy.Auth)
+			auth.User = server.addr.User.Username()
+			if p, ok := server.addr.User.Password(); ok {
+				auth.Password = p
+			}
+		}
+		dialer, err = proxy.SOCKS5("tcp", addr, auth, &net.Dialer{Timeout: time.Second * time.Duration(timeout)})
+		if err != nil {
+			logger.Printf("%s %5d: ERR         %d Failed to dial server %s. Error: %s", lo.mode, lo.total, route, addr, err)
 			try <- 0
 			return
 		}
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, route, network, lo.key, socks[server-1].addr)
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, route, network, lo.key, addr)
 		}
 		*out, err = dialer.Dial(network, lo.key)
+	} else {
+		// HTTP or HTTPS
+		server := proxies[server-1]
+		addr := server.addr.Host
+		var auth http_dialer.ProxyAuthorization
+		if server.addr.User != nil {
+			user := server.addr.User.Username()
+			password, _ := server.addr.User.Password()
+			auth = http_dialer.AuthBasic(user, password)
+		}
+		dialer := http_dialer.New(server.addr, http_dialer.WithProxyAuth(auth),
+			http_dialer.WithConnectionTimeout(time.Second*time.Duration(timeout)))
+		if *verbose {
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, route, network, lo.key, addr)
+		}
+		// HTTP dialer only accepts tcp as network
+		*out, err = dialer.Dial("tcp", lo.key)
 	}
 	// Binding to interface is not available on Go natively, you have to use raw methods for each platform (SO_BINDTODEVICE on Linux, bind() on Windows) and do communication in raw
 	// Binding to local address may not affect the routing on Linux (you can see packets out of main route with wrong source address)

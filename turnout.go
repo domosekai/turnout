@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
@@ -23,13 +24,13 @@ import (
 
 var tranAddr = flag.String("b", "", "Listening address and port for transparent proxy (Linux only) (e.g. 0.0.0.0:2222, [::]:2222)")
 var httpAddr = flag.String("h", "", "Listening address and port for HTTP proxy (e.g. 0.0.0.0:8080, [::]:8080)")
-var socksAddr = flag.String("s", "", "Priority 1 SOCKS5 server(s) for route 2. Multiple servers will be attempted simultaneously to find the fastest route. Use s2 and s3 if you need fail-over only. (e.g. 127.0.0.1:1080,127.0.0.1:1081)")
-var socksAddr2 = flag.String("s2", "", "Priority 2 SOCKS5 server(s) for route 2. These servers will only be used if priority 1 servers have failed.")
-var socksAddr3 = flag.String("s3", "", "Priority 3 SOCKS5 server(s) for route 2. These servers will only be used if priority 2 servers have failed.")
-var specialAddr = flag.String("p", "", "Special SOCKS5 server(s) for route 3. These servers will only be used for specified destinations.")
+var socksAddr = flag.String("s", "", "Priority 1 proxy(s) for route 2. Multiple servers will be attempted simultaneously to find the fastest route. Use s2 and s3 if you need fail-over only. (e.g. 127.0.0.1:1080,user:pass@127.0.0.1:1081)")
+var socksAddr2 = flag.String("s2", "", "Priority 2 proxy(s) for route 2. These servers will only be used if priority 1 servers have failed.")
+var socksAddr3 = flag.String("s3", "", "Priority 3 proxy(s) for route 2. These servers will only be used if priority 2 servers have failed.")
+var specialAddr = flag.String("p", "", "Special proxy(s) for route 3. These servers will only be used for specified destinations.")
 
-//var ifname2 = flag.String("if", "", "Network interface for secondary route (e.g. eth1, wlan1)")
-//var dns2Addr = flag.String("dns", "8.8.8.8:53", "DNS nameserver for the secondary interface (no need for SOCKS) (e.g. 8.8.8.8)")
+// var ifname2 = flag.String("if", "", "Network interface for secondary route (e.g. eth1, wlan1)")
+// var dns2Addr = flag.String("dns", "8.8.8.8:53", "DNS nameserver for the secondary interface (no need for SOCKS) (e.g. 8.8.8.8)")
 var tproxy = flag.Bool("t", false, "Use TPROXY in addition to REDIRECT mode for transparent proxy (Linux only)")
 var hostFile = flag.String("host", "", "File containing custom rules based on hostnames")
 var ipFile = flag.String("ip", "", "File containing custom rules based on IP/CIDRs")
@@ -80,7 +81,7 @@ type remoteConn struct {
 }
 
 type server struct {
-	addr string
+	addr *url.URL
 	pri  int
 }
 
@@ -92,7 +93,7 @@ var (
 	jobs     [4]int // working goroutines
 	sent     [4]int64
 	received [4]int64
-	socks    []server
+	proxies  []server
 	priority [4][]int
 	chkPorts []string
 	rt       routingTable
@@ -124,12 +125,12 @@ func main() {
 	}
 	if runtime.GOOS == "linux" {
 		if *tranAddr == "" && *httpAddr == "" {
-			log.Fatal("Neither transparent proxy or HTTP proxy is specified.")
+			log.Fatal("Neither transparent proxy or HTTP proxy is specified")
 		}
 	} else if *tranAddr != "" {
-		log.Fatal("Transparent proxy is only supported in Linux.")
+		log.Fatal("Transparent proxy is only supported in Linux")
 	} else if *httpAddr == "" {
-		log.Fatal("No HTTP proxy is specified.")
+		log.Fatal("No HTTP proxy is specified")
 	}
 	if *tranAddr != "" {
 		if s, ok := parseAddr(*tranAddr, false); !ok {
@@ -146,17 +147,17 @@ func main() {
 		}
 	}
 	/*if *socksAddr == "" && *ifname2 == "" {
-		log.Fatal("A SOCKS server or network interface is needed as upstream.")
+		log.Fatal("A proxy or network interface is needed as upstream")
 	} else if *socksAddr != "" && *ifname2 != "" {
-		log.Fatal("You have specified both a SOCKS server and a network interface. Only one is allowed.")
+		log.Fatal("You have specified both a proxy and a network interface. Only one is allowed")
 	}*/
-	if parseSOCKS(*socksAddr, 1) == 0 {
-		log.Fatal("At least 1 SOCKS5 server is needed as upstream.")
+	if parseProxy(*socksAddr, 1) == 0 {
+		log.Fatal("At least 1 proxy is needed as upstream")
 	}
-	if parseSOCKS(*socksAddr2, 2) > 0 {
-		parseSOCKS(*socksAddr3, 3)
+	if parseProxy(*socksAddr2, 2) > 0 {
+		parseProxy(*socksAddr3, 3)
 	}
-	parseSOCKS(*specialAddr, 0)
+	parseProxy(*specialAddr, 0)
 	/*if *ifname2 != "" {
 		if _, err := net.InterfaceByName(*ifname2); err != nil {
 			log.Fatalf("Invalid interface name %s", *ifname2)
@@ -249,20 +250,35 @@ func parseAddr(str string, dns bool) (string, bool) {
 	return "", false
 }
 
-func parseSOCKS(str string, pri int) int {
+func parseProxy(str string, pri int) int {
 	if str == "" {
 		return 0
 	}
 	for _, s := range strings.Split(str, ",") {
-		if s0, ok := parseAddr(s, false); !ok {
-			log.Fatalf("Invalid SOCKS5 proxy address %s", s)
-		} else if pri > 0 {
-			logger.Printf("SOCKS5 server %s (Priority %d)", s0, pri)
-			socks = append(socks, server{s0, pri})
-			priority[pri] = append(priority[pri], len(socks)-1)
+		// Assume SOCKS5 if no scheme is given (backward compatibility)
+		if !strings.Contains(s, "//") {
+			s = "socks5://" + s
+		}
+		if addr, err := url.Parse(s); err != nil {
+			log.Fatalf("Invalid proxy %s: %s", s, err)
 		} else {
-			logger.Printf("Special SOCKS5 server %s", s0)
-			socks = append(socks, server{s0, pri})
+			addr.Scheme = strings.ToLower(addr.Scheme)
+			switch addr.Scheme {
+			case "", "socks", "socks5", "socks5h":
+				addr.Scheme = "socks5"
+			case "http", "https":
+			default:
+				log.Fatalf("Unsupported proxy scheme %s", addr.Scheme)
+			}
+			if pri > 0 {
+				logger.Printf("%s server %s (Priority %d)", addr.Scheme, addr.Host, pri)
+				proxies = append(proxies, server{addr, pri})
+				priority[pri] = append(priority[pri], len(proxies)-1)
+			} else {
+				// pri == 0 for special
+				logger.Printf("%s special server %s", addr.Scheme, addr.Host)
+				proxies = append(proxies, server{addr, pri})
+			}
 		}
 	}
 	return len(priority[pri])
