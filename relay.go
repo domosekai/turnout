@@ -8,6 +8,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -622,7 +623,14 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 			password, _ := server.addr.User.Password()
 			auth = http_dialer.AuthBasic(user, password)
 		}
-		dialer := http_dialer.New(server.addr, http_dialer.WithProxyAuth(auth),
+		// Optional TLS configuration
+		tlsConfig := tls.Config{
+			//			MinVersion: tls.VersionTLS10,
+			//			NextProtos: []string{"http/1.1"},
+		}
+		dialer := http_dialer.New(server.addr,
+			http_dialer.WithProxyAuth(auth),
+			http_dialer.WithTls(&tlsConfig),
 			http_dialer.WithConnectionTimeout(time.Second*time.Duration(timeout)))
 		if *verbose {
 			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, route, network, lo.key, addr)
