@@ -86,7 +86,7 @@ type server struct {
 }
 
 var (
-	logger   *log.Logger
+	logger   Logger
 	wg       sync.WaitGroup
 	mu       sync.Mutex
 	open     [4]int // open connections
@@ -107,22 +107,8 @@ func main() {
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
-	if *logFile != "" {
-		var f *os.File
-		var err error
-		if *logAppend {
-			f, err = os.OpenFile(*logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		} else {
-			f, err = os.Create(*logFile)
-		}
-		if err != nil {
-			log.Fatalf("Failed to create log file. Error: %s", err)
-		}
-		defer f.Close()
-		logger = log.New(f, "", log.Ldate|log.Ltime|log.Lmicroseconds)
-	} else {
-		logger = log.New(os.Stdout, "", log.Ldate|log.Ltime|log.Lmicroseconds)
-	}
+	logger.Open(*logFile, *logAppend)
+	defer logger.Close()
 	if runtime.GOOS == "linux" {
 		if *tranAddr == "" && *httpAddr == "" {
 			log.Fatal("Neither transparent proxy or HTTP proxy is specified")
@@ -192,21 +178,30 @@ func main() {
 
 	// Listen for signal to clear cache and re-read rules
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGHUP)
+	signal.Notify(sigs, syscall.SIGHUP, syscall.SIGUSR2)
 	go func() {
-		for range sigs {
-			logger.Println("Received signal to reload files and clear cache")
-			if *ipFile != "" {
-				readIPRules(&ipRules, *ipFile)
+		for sig := range sigs {
+			switch sig {
+			case syscall.SIGHUP:
+				logger.Println("Received signal to reload files and clear cache")
+				if *ipFile != "" {
+					readIPRules(&ipRules, *ipFile)
+				}
+				if *hostFile != "" {
+					readHostRules(&hostRules, *hostFile)
+				}
+				slowIPSet.clear()
+				slowHostSet.clear()
+				blockedIPSet.clear()
+				blockedHostSet.clear()
+				logger.Println("Slow and blocked lists flushed")
+			case syscall.SIGUSR2:
+				if *logFile == "" {
+					break
+				}
+				logger.Println("Received signal to reopen log file")
+				logger.Open(*logFile, *logAppend)
 			}
-			if *hostFile != "" {
-				readHostRules(&hostRules, *hostFile)
-			}
-			slowIPSet.clear()
-			slowHostSet.clear()
-			blockedIPSet.clear()
-			blockedHostSet.clear()
-			logger.Println("Slow and blocked lists flushed")
 		}
 	}()
 

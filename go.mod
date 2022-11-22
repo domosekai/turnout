@@ -1,6 +1,6 @@
 module turnout
 
-go 1.17
+go 1.18
 
 require (
 	github.com/mwitkow/go-http-dialer v0.0.0-20161116154839-378f744fb2b8
