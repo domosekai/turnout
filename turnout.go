@@ -14,11 +14,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -176,34 +174,7 @@ func main() {
 	blockedIPSet.timeout = time.Minute * time.Duration(*blockedTimeout)
 	blockedHostSet.timeout = time.Minute * time.Duration(*blockedTimeout)
 
-	// Listen for signal to clear cache and re-read rules
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGHUP, syscall.SIGUSR2)
-	go func() {
-		for sig := range sigs {
-			switch sig {
-			case syscall.SIGHUP:
-				logger.Println("Received signal to reload files and clear cache")
-				if *ipFile != "" {
-					readIPRules(&ipRules, *ipFile)
-				}
-				if *hostFile != "" {
-					readHostRules(&hostRules, *hostFile)
-				}
-				slowIPSet.clear()
-				slowHostSet.clear()
-				blockedIPSet.clear()
-				blockedHostSet.clear()
-				logger.Println("Slow and blocked lists flushed")
-			case syscall.SIGUSR2:
-				if *logFile == "" {
-					break
-				}
-				logger.Println("Received signal to reopen log file")
-				logger.Open(*logFile, *logAppend)
-			}
-		}
-	}()
+	go listenSignal()
 
 	// Main process
 	total := 0

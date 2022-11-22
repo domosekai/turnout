@@ -52,6 +52,12 @@ func (l *Logger) Printf(format string, v ...any) {
 	l.rw.RUnlock()
 }
 
+func (l *Logger) Print(v ...any) {
+	l.rw.RLock()
+	l.logger.Print(v...)
+	l.rw.RUnlock()
+}
+
 func (l *Logger) Println(v ...any) {
 	l.rw.RLock()
 	l.logger.Println(v...)
