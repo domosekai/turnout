@@ -166,6 +166,22 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   https://a-fake-proxy.com:443                # HTTPS proxy
   ```
 
+- System signal
+
+  Turnout has borrowed the idea from dnsmasq to perform actions upon receiving certain kill signals.
+  
+  - SIGHUP
+  
+    IP and host rules are re-read from the files. 
+    
+    This is useful when you modified the rules but do not want to rerun. Ongoing connections will not be affected.
+    
+  - SIGUSR2 (not available on Windows)
+  
+    Close and reopen the log file. 
+    
+    Used after you have rotated the log file, either by hand (`mv`) or with logrotate.
+
 ### Known issues
 
   - Linux open files limit
