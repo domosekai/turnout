@@ -24,9 +24,8 @@ import (
 const (
 	initialSize       = 10000
 	bufferSize        = 4096 // Not effective if speed detection is disabled (system default buffer size will be used)
-	minSampleInterval = 7    // Due to slow start, this seconds are needed for meaningful speed detection
+	minSampleInterval = 3    // Due to slow start, this seconds are needed for meaningful speed detection
 	maxSampleInterval = 30   // Too long sample period might not mean anything
-	speedRecoveryTime = 120  // Speed recovered to normal within this many seconds will be removed from slow list
 	minSpeed          = 1    // Average speed below this kB/s is likely to have special purpose
 	blockSafeTime     = 2    // After this many seconds it is less likely to be reset by firewall
 )
@@ -1255,9 +1254,8 @@ func (re *remoteConn) writeTo(lo localConn, out io.Reader, single bool, addr net
 		reqStart := re.lastReq
 		sessionStart := re.lastReq
 		var slow, added bool
-		detectSpeed := true
-		var timeAdded time.Time
 		var speed, aveSpeed, totalSpeed, reqTime float64
+		var recovered int
 		for {
 			p := make([]byte, bufferSize)
 			var n int
@@ -1297,38 +1295,40 @@ func (re *remoteConn) writeTo(lo localConn, out io.Reader, single bool, addr net
 					}
 				}
 				added = true
-				timeAdded = time.Now()
 			}
 			sample += int64(n)
 			req += int64(n)
 			// If n = bufferSize, either connection is too fast or client is slow
-			if detectSpeed && n < bufferSize {
+			if n < bufferSize {
 				sampleTime := time.Since(sampleStart).Seconds()
 				reqTime = time.Since(reqStart).Seconds()
 				if sampleTime > 0 && reqTime > 0 {
 					speed = float64(sample) / 1000 / sampleTime
 					aveSpeed = float64(req) / 1000 / reqTime
 					if sampleTime > minSampleInterval {
-						if !slow && sampleTime < maxSampleInterval {
+						if sampleTime < maxSampleInterval {
 							if (totalSpeed < float64(*slowSpeed) && aveSpeed < float64(*slowSpeed) && speed < float64(*slowSpeed) || speed < float64(*slowSpeed)*0.3) && aveSpeed > minSpeed && totalSpeed > minSpeed {
 								// Set flag to add to list only if this read is not the final one
 								slow = true
+								// Reset recovery counter
+								recovered = 0
 							}
 						}
 						sampleStart = time.Now()
 						sample = 0
 					}
 					if slow && reqTime > 0.2 && aveSpeed > float64(*slowSpeed)*1.2 && speed > float64(*slowSpeed) {
-						logger.Printf("%s %5d:     SLO     %d Speed to %s %s recovered to %.1f kB/s, %.1f kB/s since last request, %.1f kB/s overall", lo.mode, lo.total, route, lo.host, addr, speed, aveSpeed, totalSpeed)
-						slow = false
-						added = false
-						if tcpAddr := addr.(*net.TCPAddr); tcpAddr != nil && !*slowDry {
-							slowIPSet.find(tcpAddr.IP, "", true)
-							slowHostSet.find(lo.host, "", true)
+						recovered += 1
+						// Remove from slow list if speed has recovered for 3 consecutive sampling periods
+						if recovered >= 3 {
+							logger.Printf("%s %5d:     SLO     %d Speed to %s %s recovered to %.1f kB/s, %.1f kB/s since last request, %.1f kB/s overall", lo.mode, lo.total, route, lo.host, addr, speed, aveSpeed, totalSpeed)
+							slow = false
+							added = false
+							if tcpAddr := addr.(*net.TCPAddr); tcpAddr != nil && !*slowDry {
+								slowIPSet.find(tcpAddr.IP, "", true)
+								slowHostSet.find(lo.host, "", true)
+							}
 						}
-					}
-					if added && time.Since(timeAdded).Seconds() > speedRecoveryTime {
-						detectSpeed = false
 					}
 				}
 			}
