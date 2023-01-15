@@ -325,7 +325,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if !*fastSwitch {
 					if !exist {
 						if *verbose {
-							logger.Printf("%s %5d:     NEW     1 Save new route to %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:     NEW     1 Save route 1 server 1 for %s", lo.mode, lo.total, lo.key)
 						}
 						entry.save(1, 1)
 					} else {
@@ -353,7 +353,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:     NEW     2 Save new route to %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:     NEW     2 Save route 2 server %d for %s", lo.mode, lo.total, server2, lo.key)
 							}
 							entry.save(2, server2)
 						} else {
@@ -399,7 +399,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:     NEW     %d Save new route to %s", lo.mode, lo.total, r, lo.key)
+								logger.Printf("%s %5d:     NEW     %d Save route %d server %d for %s", lo.mode, lo.total, r, r, server2, lo.key)
 							}
 							entry.save(r, server2)
 						} else {
@@ -419,7 +419,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					if !*fastSwitch {
 						if !exist {
 							if *verbose {
-								logger.Printf("%s %5d:     NEW     2 Save new route to %s", lo.mode, lo.total, lo.key)
+								logger.Printf("%s %5d:     NEW     2 Save route 2 server %d for %s", lo.mode, lo.total, server2, lo.key)
 							}
 							entry.save(2, server2)
 						} else {
@@ -481,7 +481,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if !*fastSwitch {
 					if !exist {
 						if *verbose {
-							logger.Printf("%s %5d:     NEW     2 Save new route to %s", lo.mode, lo.total, lo.key)
+							logger.Printf("%s %5d:     NEW     2 Save route 2 server %d for %s", lo.mode, lo.total, server2, lo.key)
 						}
 						entry.save(2, server2)
 					} else {
