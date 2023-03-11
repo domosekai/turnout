@@ -149,6 +149,9 @@ func (lo *localConn) getFirstByte() {
 		n1, _ := io.ReadFull(lo.buf, first[n:])
 		lo.conn.SetReadDeadline(time.Time{})
 		n += n1
+		if n < initialSize {
+			re.firstIsFull = false
+		}
 	}
 
 	// Only use host as connection and routing key if dest is IP
