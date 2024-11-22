@@ -50,6 +50,7 @@ var fastSwitch = flag.Bool("fastswitch", false, "Do not enforce same route to a 
 var verbose = flag.Bool("verbose", false, "Verbose logging")
 var httpBadStatus = flag.String("badhttp", "", "Drop specified (non-TLS) HTTP response from route 1 (e.g. 403,404,5*)")
 var firstByteDelay = flag.Uint("fbdelay", 0, "Additional delay (ms) applied after first byte is received on route 1")
+var shdnsAddr = flag.String("shdns", "", "shdns address and port for reverse DNS lookup")
 var version = "unknown"
 var builddate = "unknown"
 
@@ -95,6 +96,7 @@ var (
 	priority [4][]int
 	chkPorts []string
 	rt       routingTable
+	shdns    *net.UDPAddr
 	//dns2     string
 )
 
@@ -155,6 +157,11 @@ func main() {
 			logger.Printf("Secondary route will use %s as DNS nameserver", dns)
 		}
 	}*/
+	if *shdnsAddr != "" {
+		if _, _, err := net.SplitHostPort(*shdnsAddr); err == nil {
+			shdns, _ = net.ResolveUDPAddr("udp", *shdnsAddr)
+		}
+	}
 	if *ipFile != "" {
 		readIPRules(&ipRules, *ipFile)
 	}

@@ -155,8 +155,18 @@ func (lo *localConn) getFirstByte() {
 	}
 
 	// Only use host as connection and routing key if dest is IP
-	if net.ParseIP(lo.dest) != nil && lo.host != "" {
-		lo.key = net.JoinHostPort(lo.host, lo.dport)
+	if ip := net.ParseIP(lo.dest); ip != nil {
+		if lo.host != "" {
+			lo.key = net.JoinHostPort(lo.host, lo.dport)
+		} else if host := getHostnameFromIP(ip); host != "" {
+			if *verbose {
+				logger.Printf("%s %5d:  *            Hostname resolved to %s", lo.mode, lo.total, host)
+			}
+			lo.host = host
+			lo.key = net.JoinHostPort(host, lo.dport)
+		} else {
+			lo.key = net.JoinHostPort(lo.dest, lo.dport)
+		}
 	} else {
 		lo.key = net.JoinHostPort(lo.dest, lo.dport)
 	}
