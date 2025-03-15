@@ -55,8 +55,8 @@ var version = "unknown"
 var builddate = "unknown"
 
 type localConn struct {
-	source, dest  string
-	sport, dport  string
+	source        *net.TCPAddr
+	dest, dport   string
 	host          string
 	key           string
 	conn          net.Conn

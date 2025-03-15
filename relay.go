@@ -600,7 +600,14 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 		if *verbose {
 			logger.Printf("%s %5d:  *          %d Dialing to %s %s", lo.mode, lo.total, route, network, dp)
 		}
-		*out, err = net.DialTimeout(network, dp, time.Second*time.Duration(timeout))
+		// it's possible to use client's address as source but we need to fix the return route
+		// useful when turnout is sitting between client and upstream
+		dialer := &net.Dialer{
+			Timeout: time.Second * time.Duration(timeout),
+			//LocalAddr: lo.source,
+			//Control:   transparentControl,
+		}
+		*out, err = dialer.Dial(network, dp)
 	} else if proxies[server-1].addr.Scheme == "socks5" {
 		// SOCKS5
 		server := proxies[server-1]

@@ -7,6 +7,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"log"
 	"net"
 	"strings"
@@ -106,7 +107,23 @@ func (lo *localConn) handleLocal() {
 		logger.Printf("T %5d:  *            New %s %s -> %s", lo.total, lo.network, lo.conn.RemoteAddr(), dest)
 	}
 	lo.dest, lo.dport, _ = net.SplitHostPort(dest)
+	lo.source = lo.conn.RemoteAddr().(*net.TCPAddr)
 	lo.buf = bufio.NewReader(lo.conn)
 	lo.mode = "T"
 	lo.getFirstByte()
+}
+
+func transparentControl(network, address string, c syscall.RawConn) error {
+	var err1, err2 error
+	err := c.Control(func(fd uintptr) {
+		err1 = syscall.SetsockoptInt(int(fd), syscall.SOL_IP, syscall.IP_TRANSPARENT, 1)
+		err2 = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+	})
+	if err1 != nil {
+		return fmt.Errorf("failed to set socket option IP_TRANSPARENT: %v", err1)
+	}
+	if err2 != nil {
+		return fmt.Errorf("failed to set socket option SO_REUSEADDR: %v", err2)
+	}
+	return err
 }
