@@ -59,6 +59,7 @@ func (lo *localConn) getFirstByte() {
 	// Prepare remote connection
 	var re remoteConn
 	re.firstIsFull = true
+	re.successive = true
 
 	// TLS
 	if n >= recordHeaderLen && recordType(first[0]) == recordTypeHandshake {
@@ -109,6 +110,9 @@ func (lo *localConn) getFirstByte() {
 				}
 				re.tls = true
 				re.firstIsFull = false
+				if !m.earlyData {
+					re.successive = false
+				}
 			}
 		}
 
@@ -298,11 +302,10 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	}
 
 	// Send signal to workers
-	successive := !re.tls
 	switch route {
 	case 0:
 		start[0] <- true
-		if !successive && server == 0 {
+		if !re.successive && server == 0 {
 			for range priority[1] {
 				start[1] <- true
 			}
@@ -310,7 +313,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	case 1:
 		start[0] <- true
 	case 2:
-		if !successive && server == 0 {
+		if !re.successive && server == 0 {
 			for range priority[1] {
 				start[1] <- true
 			}
@@ -364,7 +367,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			}
 			available1--
 			if available2 > 0 {
-				if successive {
+				if re.successive {
 					start[1] <- true
 				}
 				if server2 > 0 {
@@ -460,7 +463,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					available2--
 				}
 				if available2 > 0 && server2 == 0 {
-					if successive {
+					if re.successive {
 						if count2 < len(priority[1]) {
 							start[1] <- true
 						} else if count2 < len(priority[1])+len(priority[2]) {

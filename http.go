@@ -183,6 +183,7 @@ func (lo *localConn) handleHTTP() {
 					firstReq:      req,
 					first:         header,
 					firstIsFull:   req.ContentLength != 0,
+					successive:    true,
 				}
 				if re.getRouteFor(*lo) {
 					newConn = false

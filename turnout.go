@@ -75,6 +75,7 @@ type remoteConn struct {
 	ruleBased     bool
 	hasConnection bool
 	tls           bool
+	successive    bool
 	lastReq       time.Time
 	sent          int64
 }
