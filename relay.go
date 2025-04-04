@@ -102,6 +102,11 @@ func (lo *localConn) getFirstByte() {
 						logger.Printf("%s %5d:  *            %s Client Hello", lo.mode, lo.total, m.verString)
 					}
 				}
+				if m.earlyData {
+					if *verbose {
+						logger.Printf("%s %5d:  *            %s Early Data", lo.mode, lo.total, m.verString)
+					}
+				}
 				re.tls = true
 				re.firstIsFull = false
 			}

@@ -1,4 +1,6 @@
 // From Go crypto/tls package
+// https://github.com/golang/go/blob/master/src/crypto/tls/handshake_messages.go
+
 // Copyright 2009 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -150,6 +152,7 @@ type clientHelloMsg struct {
 	secureRenegotiationSupported bool
 	supportedVersions            []uint16
 	esni                         bool
+	earlyData                    bool
 	verString                    string
 }
 
@@ -253,6 +256,9 @@ func (m *clientHelloMsg) unmarshal(data []byte) bool {
 			}
 		case extensionEncryptedServerName:
 			m.esni = true
+			extData = nil
+		case extensionEarlyData:
+			m.earlyData = true
 			extData = nil
 		default:
 			// Ignore unknown extensions.
