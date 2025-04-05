@@ -41,7 +41,7 @@ var (
 func (lo *localConn) getFirstByte() {
 
 	// Set initial timeout to a large value (git may have more than 1s delay)
-	lo.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
+	lo.conn.SetReadDeadline(time.Now().Add(time.Second * 3)) // shared with subsequenet reads when first is incomplete
 	first := make([]byte, initialSize)
 	n, err := lo.buf.Read(first)
 	if err == nil {
@@ -54,7 +54,6 @@ func (lo *localConn) getFirstByte() {
 		}
 		return
 	}
-	lo.conn.SetReadDeadline(time.Time{})
 
 	// Prepare remote connection
 	var re remoteConn
@@ -72,12 +71,11 @@ func (lo *localConn) getFirstByte() {
 				logger.Printf("%s %5d:  *            TLS handshake incomplete. Fetching another %d bytes from client", lo.mode, lo.total, n1)
 			}
 			buf := make([]byte, n1)
-			lo.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
-			_, err = io.ReadFull(lo.buf, buf)
-			lo.conn.SetReadDeadline(time.Time{})
-			if err == nil {
-				first = append(first[:n], buf...)
-				n += n1
+			var n2 int
+			n2, err = io.ReadFull(lo.buf, buf)
+			if n2 > 0 {
+				first = append(first[:n], buf[:n2]...)
+				n += n2
 				if *verbose {
 					logger.Printf("%s %5d:  *            First %d bytes from client", lo.mode, lo.total, n)
 				}
@@ -126,9 +124,7 @@ func (lo *localConn) getFirstByte() {
 			if *verbose {
 				logger.Printf("%s %5d:  *            HTTP header incomplete. Continue fetching from client", lo.mode, lo.total)
 			}
-			lo.conn.SetReadDeadline(time.Now().Add(time.Second * 1))
 			n1, _ := io.ReadFull(lo.buf, first[n:])
-			lo.conn.SetReadDeadline(time.Time{})
 			if n1 > 0 {
 				n += n1
 				if *verbose {
@@ -151,6 +147,8 @@ func (lo *localConn) getFirstByte() {
 			}
 		}
 	}
+
+	lo.conn.SetReadDeadline(time.Time{})
 
 	if n > 0 && n < initialSize && !re.tls && re.firstReq == nil {
 		// Allow subsequent reads within very short period of time
