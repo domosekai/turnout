@@ -74,10 +74,14 @@ func (lo *localConn) getFirstByte() {
 			var n2 int
 			n2, err = io.ReadFull(lo.buf, buf)
 			if n2 > 0 {
-				first = append(first[:n], buf[:n2]...)
+				if n+n2 > initialSize {
+					first = append(first[:n], buf[:n2]...)
+				} else {
+					copy(first[n:], buf[:n2])
+				}
 				n += n2
 				if *verbose {
-					logger.Printf("%s %5d:  *            First %d bytes from client", lo.mode, lo.total, n)
+					logger.Printf("%s %5d:  *            Another %d bytes from client", lo.mode, lo.total, n2)
 				}
 			}
 		}
@@ -116,21 +120,23 @@ func (lo *localConn) getFirstByte() {
 
 	} else if n > 0 {
 
-		// HTTP
-		req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(first[:n])))
+		// Make a concatenated reader
+		second := new(bytes.Buffer)
+		tee := io.TeeReader(lo.buf, second)
+		rd := io.MultiReader(bytes.NewReader(first[:n]), tee)
 
-		// Check completeness
-		if err != nil && errors.Is(err, io.ErrUnexpectedEOF) {
-			if *verbose {
-				logger.Printf("%s %5d:  *            HTTP header incomplete. Continue fetching from client", lo.mode, lo.total)
+		// HTTP
+		req, err := http.ReadRequest(bufio.NewReader(rd))
+		n2 := second.Len()
+		if n2 > 0 {
+			if n+n2 > initialSize {
+				first = append(first[:n], second.Bytes()...)
+			} else {
+				copy(first[n:], second.Bytes())
 			}
-			n1, _ := io.ReadFull(lo.buf, first[n:])
-			if n1 > 0 {
-				n += n1
-				if *verbose {
-					logger.Printf("%s %5d:  *            First %d bytes from client", lo.mode, lo.total, n)
-				}
-				req, err = http.ReadRequest(bufio.NewReader(bytes.NewReader(first[:n])))
+			n += n2
+			if *verbose {
+				logger.Printf("%s %5d:  *            Another %d bytes from client", lo.mode, lo.total, n2)
 			}
 		}
 
