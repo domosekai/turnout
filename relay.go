@@ -124,6 +124,10 @@ func (lo *localConn) getFirstByte() {
 
 	} else if n > 0 {
 
+		if n < initialSize {
+			re.firstIsFull = false
+		}
+
 		// Make a concatenated reader
 		second := new(bytes.Buffer)
 		tee := io.TeeReader(lo.buf, second)
@@ -152,10 +156,15 @@ func (lo *localConn) getFirstByte() {
 				lo.host = host
 			}
 			re.firstReq = req
-			if req.ContentLength == 0 {
-				re.firstIsFull = false
+			if req.ContentLength != 0 {
+				re.firstIsFull = true
 			}
 		}
+
+	} else {
+		// assume server should send something first if client is silent (e.g. SMTP)
+		re.firstIsFull = false
+		re.successive = false
 	}
 
 	lo.conn.SetReadDeadline(time.Time{})
