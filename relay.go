@@ -39,9 +39,8 @@ var (
 
 // Wait for first byte from client, should usually come immediately with ACK in the 3-way handshake, or never come (FTP)
 func (lo *localConn) getFirstByte() {
-
 	// Set initial timeout to a large value (git may have more than 1s delay)
-	lo.conn.SetReadDeadline(time.Now().Add(time.Second * 3)) // shared with subsequenet reads when first is incomplete
+	lo.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
 	first := make([]byte, initialSize)
 	n, err := lo.buf.Read(first)
 	if err == nil {
@@ -54,6 +53,9 @@ func (lo *localConn) getFirstByte() {
 		}
 		return
 	}
+
+	// Set a shorter timeout for subsequent reads
+	lo.conn.SetReadDeadline(time.Now().Add(time.Second))
 
 	// Prepare remote connection
 	var re remoteConn
@@ -167,18 +169,16 @@ func (lo *localConn) getFirstByte() {
 		re.successive = false
 	}
 
-	lo.conn.SetReadDeadline(time.Time{})
-
 	if n > 0 && n < initialSize && !re.tls && re.firstReq == nil {
-		// Allow subsequent reads within very short period of time
-		lo.conn.SetReadDeadline(time.Now().Add(time.Millisecond * 100))
+		// read within time limit, do nothing if a second read has timed out
 		n1, _ := io.ReadFull(lo.buf, first[n:])
-		lo.conn.SetReadDeadline(time.Time{})
 		n += n1
 		if n < initialSize {
 			re.firstIsFull = false
 		}
 	}
+
+	lo.conn.SetReadDeadline(time.Time{})
 
 	// Only use host as connection and routing key if dest is IP
 	if ip := net.ParseIP(lo.dest); ip != nil {
