@@ -182,6 +182,7 @@ func (lo *localConn) getFirstByte() {
 
 	// Only use host as connection and routing key if dest is IP
 	if ip := net.ParseIP(lo.dest); ip != nil {
+		lo.destIsIP = true
 		if lo.host != "" {
 			lo.key = net.JoinHostPort(lo.host, lo.dport)
 		} else if host := getHostnameFromIP(ip); host != "" {
@@ -194,6 +195,7 @@ func (lo *localConn) getFirstByte() {
 			lo.key = net.JoinHostPort(lo.dest, lo.dport)
 		}
 	} else {
+		lo.destIsIP = false
 		lo.key = net.JoinHostPort(lo.dest, lo.dport)
 	}
 
@@ -763,8 +765,8 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 		}
 	}()
 
-	if route == 1 && !re.ruleBased && *dnsOK && lo.mode == "H" && lo.host != "" {
-		// dest is hostname, match IP rules before sending first byte if DNS is ok
+	// dest is hostname, match IP rules before sending first byte if DNS is ok
+	if route == 1 && !re.ruleBased && !lo.destIsIP && *dnsOK {
 		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
 			newRoute, re.ruleBased = matchIP(lo.total, lo.mode, tcpAddr.IP, lo.dport)

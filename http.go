@@ -115,8 +115,10 @@ func (lo *localConn) handleHTTP() {
 			lo.key = net.JoinHostPort(host, port)
 			if net.ParseIP(host) == nil {
 				lo.host = host
+				lo.destIsIP = false
 			} else {
 				lo.host = ""
+				lo.destIsIP = true
 			}
 			lo.dport = port
 			newConn = true

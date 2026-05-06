@@ -10,4 +10,8 @@ func dispatch(total *int) {
 		wg.Add(1)
 		go doHTTP(total)
 	}
+	if *socksListenAddr != "" {
+		wg.Add(1)
+		go doSocks(total)
+	}
 }

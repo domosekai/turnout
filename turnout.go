@@ -22,6 +22,7 @@ import (
 
 var tranAddr = flag.String("b", "", "Listening address and port for transparent proxy (Linux only) (e.g. 0.0.0.0:2222, [::]:2222)")
 var httpAddr = flag.String("h", "", "Listening address and port for HTTP proxy (e.g. 0.0.0.0:8080, [::]:8080)")
+var socksListenAddr = flag.String("socks", "", "Listening address and port for SOCKS5 proxy (e.g. 0.0.0.0:1080, [::]:1080)")
 var socksAddr = flag.String("s", "", "Priority 1 proxy(s) for route 2. Multiple servers will be attempted simultaneously to find the fastest route. Use s2 and s3 if you need fail-over only. (e.g. 127.0.0.1:1080,user:pass@127.0.0.1:1081)")
 var socksAddr2 = flag.String("s2", "", "Priority 2 proxy(s) for route 2. These servers will only be used if priority 1 servers have failed.")
 var socksAddr3 = flag.String("s3", "", "Priority 3 proxy(s) for route 2. These servers will only be used if priority 2 servers have failed.")
@@ -59,6 +60,7 @@ type localConn struct {
 	dest, dport   string
 	host          string
 	key           string
+	destIsIP      bool
 	conn          net.Conn
 	buf           *bufio.Reader
 	mode, network string
@@ -111,13 +113,13 @@ func main() {
 	logger.Open(*logFile, *logAppend)
 	defer logger.Close()
 	if runtime.GOOS == "linux" {
-		if *tranAddr == "" && *httpAddr == "" {
-			log.Fatal("Neither transparent proxy or HTTP proxy is specified")
+		if *tranAddr == "" && *httpAddr == "" && *socksListenAddr == "" {
+			log.Fatal("Neither transparent proxy, HTTP proxy or SOCKS5 proxy is specified")
 		}
 	} else if *tranAddr != "" {
 		log.Fatal("Transparent proxy is only supported in Linux")
-	} else if *httpAddr == "" {
-		log.Fatal("No HTTP proxy is specified")
+	} else if *httpAddr == "" && *socksListenAddr == "" {
+		log.Fatal("No HTTP proxy or SOCKS5 proxy is specified")
 	}
 	if *tranAddr != "" {
 		if s, ok := parseAddr(*tranAddr, false); !ok {
@@ -131,6 +133,13 @@ func main() {
 			log.Fatalf("Invalid HTTP proxy address %s", *httpAddr)
 		} else {
 			*httpAddr = s
+		}
+	}
+	if *socksListenAddr != "" {
+		if s, ok := parseAddr(*socksListenAddr, false); !ok {
+			log.Fatalf("Invalid SOCKS5 proxy address %s", *socksListenAddr)
+		} else {
+			*socksListenAddr = s
 		}
 	}
 	/*if *socksAddr == "" && *ifname2 == "" {
