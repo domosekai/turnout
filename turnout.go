@@ -56,7 +56,7 @@ var version = "unknown"
 var builddate = "unknown"
 
 type localConn struct {
-	source        *net.TCPAddr
+	source        *net.TCPAddr // for transparent socket (source spoofing)
 	dest, dport   string
 	host          string
 	key           string

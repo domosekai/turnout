@@ -82,7 +82,6 @@ func (lo *localConn) handleSocks() {
 		logger.Printf("S %5d:  *            New %s %s -> %s", lo.total, lo.network, lo.conn.RemoteAddr(), dest)
 	}
 
-	lo.source = lo.conn.RemoteAddr().(*net.TCPAddr)
 	lo.buf = bufio.NewReader(lo.conn)
 	lo.mode = "S"
 	lo.getFirstByte()

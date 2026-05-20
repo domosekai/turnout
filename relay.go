@@ -645,6 +645,15 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 		if server.addr.User != nil {
 			auth = new(proxy.Auth)
 			auth.User = server.addr.User.Username()
+			// replace username with client IP if it's "CLIENT_IP"
+			if auth.User == "CLIENT_IP" {
+				switch addr := lo.conn.RemoteAddr().(type) {
+				case *net.TCPAddr:
+					auth.User = addr.IP.String()
+				case *net.UDPAddr:
+					auth.User = addr.IP.String()
+				}
+			}
 			if p, ok := server.addr.User.Password(); ok {
 				auth.Password = p
 			}
