@@ -413,14 +413,20 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			} else {
 				if !*fastSwitch {
 					if !exist {
-						logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+						if len(re.first) > 0 {
+							logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+						}
 						rt.unlock(lo.key, entry)
 					} else {
-						logger.Printf("%s %5d:     ERR     1 Existing route to %s failed", lo.mode, lo.total, lo.key)
+						if len(re.first) > 0 {
+							logger.Printf("%s %5d:     ERR     1 Existing route to %s failed", lo.mode, lo.total, lo.key)
+						}
 						rt.del(lo.key, false, route, server)
 					}
 				} else {
-					logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+					if len(re.first) > 0 {
+						logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+					}
 				}
 				return false
 			}
@@ -502,14 +508,20 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				} else if available1 == 0 {
 					if !*fastSwitch {
 						if !exist {
-							logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+							if len(re.first) > 0 {
+								logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+							}
 							rt.unlock(lo.key, entry)
 						} else {
-							logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, route, lo.key)
+							if len(re.first) > 0 {
+								logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, route, lo.key)
+							}
 							rt.del(lo.key, false, route, server)
 						}
 					} else {
-						logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+						if len(re.first) > 0 {
+							logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+						}
 					}
 					return false
 				}
@@ -550,14 +562,20 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			}
 			if !*fastSwitch {
 				if !exist {
-					logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+					if len(re.first) > 0 {
+						logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+					}
 					rt.unlock(lo.key, entry)
 				} else {
-					logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, route, lo.key)
+					if len(re.first) > 0 {
+						logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, route, lo.key)
+					}
 					rt.del(lo.key, false, route, server)
 				}
 			} else {
-				logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+				if len(re.first) > 0 {
+					logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+				}
 			}
 			return false
 		}
