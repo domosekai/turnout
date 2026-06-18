@@ -7,6 +7,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -23,19 +24,12 @@ import (
 var tranAddr = flag.String("b", "", "Listening address and port for transparent proxy (Linux only) (e.g. 0.0.0.0:2222, [::]:2222)")
 var httpAddr = flag.String("h", "", "Listening address and port for HTTP proxy (e.g. 0.0.0.0:8080, [::]:8080)")
 var socksListenAddr = flag.String("socks", "", "Listening address and port for SOCKS5 proxy (e.g. 0.0.0.0:1080, [::]:1080)")
-var socksAddr = flag.String("s", "", "Priority 1 proxy(s) for route 2. Multiple servers will be attempted simultaneously to find the fastest route. Use s2 and s3 if you need fail-over only. (e.g. 127.0.0.1:1080,user:pass@127.0.0.1:1081)")
-var socksAddr2 = flag.String("s2", "", "Priority 2 proxy(s) for route 2. These servers will only be used if priority 1 servers have failed.")
-var socksAddr3 = flag.String("s3", "", "Priority 3 proxy(s) for route 2. These servers will only be used if priority 2 servers have failed.")
-var specialAddr = flag.String("p", "", "Special proxy(s) for route 3. These servers will only be used for specified destinations.")
-
-// var ifname2 = flag.String("if", "", "Network interface for secondary route (e.g. eth1, wlan1)")
-// var dns2Addr = flag.String("dns", "8.8.8.8:53", "DNS nameserver for the secondary interface (no need for SOCKS) (e.g. 8.8.8.8)")
+var configFile = flag.String("c", "", "Path to JSON config file containing proxy servers")
 var tproxy = flag.Bool("t", false, "Use TPROXY in addition to REDIRECT mode for transparent proxy (Linux only)")
 var hostFile = flag.String("host", "", "File containing custom rules based on hostnames")
 var ipFile = flag.String("ip", "", "File containing custom rules based on IP/CIDRs")
 var r1Priority = flag.Float64("T0", 1, "Time (seconds) during which route 1 is prioritized (TLS only)")
 var r1Timeout = flag.Uint("T1", 3, "Connection timeout (seconds) for route 1")
-var r2Timeout = flag.Uint("T2", 5, "Connection timeout (seconds) for each server on route 2")
 var force4 = flag.Bool("4", false, "Force IPv4 connections out of route 1")
 var logFile = flag.String("log", "", "Path to log file")
 var logAppend = flag.Bool("append", false, "Append to log file if exists")
@@ -83,29 +77,38 @@ type remoteConn struct {
 }
 
 type server struct {
-	addr *url.URL
-	pri  int
+	addr    *url.URL
+	route   int  // 2 or 3
+	tier    int  // tier index within its route
+	timeout uint // connection timeout in seconds
 }
 
 var (
-	logger   Logger
-	wg       sync.WaitGroup
-	mu       sync.Mutex
-	open     [4]int // open connections
-	jobs     [4]int // working goroutines
-	sent     [4]int64
-	received [4]int64
-	proxies  []server
-	priority [4][]int
-	chkPorts []string
-	rt       routingTable
-	shdns    *net.UDPAddr
-	//dns2     string
+	logger      Logger
+	wg          sync.WaitGroup
+	mu          sync.Mutex
+	open        [4]int // open connections
+	jobs        [4]int // working goroutines
+	sent        [4]int64
+	received    [4]int64
+	proxies     []server
+	route2Tiers [][]int // route2Tiers[tier] = indices into proxies
+	route3Tiers [][]int // route3Tiers[tier] = indices into proxies
+	maxTiers2   int
+	maxTiers3   int
+	chkPorts    []string
+	rt          routingTable
+	shdns       *net.UDPAddr
 )
+
+type config struct {
+	Route2 [][][]interface{} `json:"route2"`
+	Route3 [][][]interface{} `json:"route3"`
+}
 
 func main() {
 	flag.Parse()
-	if flag.NArg() > 0 || len(os.Args) == 1 {
+	if flag.NArg() > 0 || len(os.Args) == 1 || *configFile == "" {
 		fmt.Fprintf(os.Stderr, "Turnout %s (build %s) usage:\n", version, builddate)
 		flag.PrintDefaults()
 		os.Exit(1)
@@ -142,31 +145,7 @@ func main() {
 			*socksListenAddr = s
 		}
 	}
-	/*if *socksAddr == "" && *ifname2 == "" {
-		log.Fatal("A proxy or network interface is needed as upstream")
-	} else if *socksAddr != "" && *ifname2 != "" {
-		log.Fatal("You have specified both a proxy and a network interface. Only one is allowed")
-	}*/
-	if parseProxy(*socksAddr, 1) == 0 {
-		log.Fatal("At least 1 proxy is needed as upstream")
-	}
-	if parseProxy(*socksAddr2, 2) > 0 {
-		parseProxy(*socksAddr3, 3)
-	}
-	parseProxy(*specialAddr, 0)
-	/*if *ifname2 != "" {
-		if _, err := net.InterfaceByName(*ifname2); err != nil {
-			log.Fatalf("Invalid interface name %s", *ifname2)
-		} else {
-			logger.Printf("Network interface for secondary route is %s", *ifname2)
-		}
-		if dns, ok := checkAddr(*dns2Addr, true); !ok {
-			log.Fatalf("Invalid DNS nameserver %s", *dns2Addr)
-		} else {
-			dns2 = dns
-			logger.Printf("Secondary route will use %s as DNS nameserver", dns)
-		}
-	}*/
+	parseConfig(*configFile)
 	if *shdnsAddr != "" {
 		if _, _, err := net.SplitHostPort(*shdnsAddr); err == nil {
 			shdns, _ = net.ResolveUDPAddr("udp", *shdnsAddr)
@@ -233,38 +212,91 @@ func parseAddr(str string, dns bool) (string, bool) {
 	return "", false
 }
 
-func parseProxy(str string, pri int) int {
-	if str == "" {
-		return 0
+func parseConfig(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatalf("Failed to read config file %s: %s", path, err)
 	}
-	for _, s := range strings.Split(str, ",") {
-		// Assume SOCKS5 if no scheme is given (backward compatibility)
-		if !strings.Contains(s, "//") {
-			s = "socks5://" + s
-		}
-		if addr, err := url.Parse(s); err != nil {
-			log.Fatalf("Invalid proxy %s: %s", s, err)
-		} else if addr.Port() == "" {
-			log.Fatalf("Port number is missing: %s", s)
-		} else {
-			addr.Scheme = strings.ToLower(addr.Scheme)
-			switch addr.Scheme {
-			case "", "socks", "socks5", "socks5h":
-				addr.Scheme = "socks5"
-			case "http", "https":
-			default:
-				log.Fatalf("Unsupported proxy scheme %s", addr.Scheme)
-			}
-			if pri > 0 {
-				logger.Printf("%s server %s (Priority %d)", addr.Scheme, addr.Host, pri)
-				proxies = append(proxies, server{addr, pri})
-				priority[pri] = append(priority[pri], len(proxies)-1)
-			} else {
-				// pri == 0 for special
-				logger.Printf("%s special server %s", addr.Scheme, addr.Host)
-				proxies = append(proxies, server{addr, pri})
-			}
+	var cfg config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		log.Fatalf("Failed to parse config file %s: %s", path, err)
+	}
+	if len(cfg.Route2) == 0 {
+		log.Fatal("At least 1 tier with 1 proxy is needed in route2")
+	}
+	for _, tier := range cfg.Route2 {
+		if len(tier) == 0 {
+			log.Fatal("Empty tier in route2")
 		}
 	}
-	return len(priority[pri])
+	for _, tier := range cfg.Route3 {
+		if len(tier) == 0 {
+			log.Fatal("Empty tier in route3")
+		}
+	}
+
+	// Parse Route 2 proxies
+	for ti, tier := range cfg.Route2 {
+		var indices []int
+		for _, raw := range tier {
+			s := parseProxyURL(raw, 2, ti)
+			proxies = append(proxies, s)
+			indices = append(indices, len(proxies)-1)
+		}
+		route2Tiers = append(route2Tiers, indices)
+	}
+	maxTiers2 = len(route2Tiers)
+
+	// Parse Route 3 proxies
+	for ti, tier := range cfg.Route3 {
+		var indices []int
+		for _, raw := range tier {
+			s := parseProxyURL(raw, 3, ti)
+			proxies = append(proxies, s)
+			indices = append(indices, len(proxies)-1)
+		}
+		route3Tiers = append(route3Tiers, indices)
+	}
+	maxTiers3 = len(route3Tiers)
+}
+
+func parseProxyURL(raw []interface{}, route, tier int) server {
+	if len(raw) < 2 {
+		log.Fatalf("Proxy entry must be [url, timeout]: %v", raw)
+	}
+	urlStr, ok := raw[0].(string)
+	if !ok {
+		log.Fatalf("Proxy URL must be a string: %v", raw[0])
+	}
+	timeoutF, ok := raw[1].(float64)
+	if !ok {
+		log.Fatalf("Proxy timeout must be a number: %v", raw[1])
+	}
+	if timeoutF != float64(int(timeoutF)) || timeoutF <= 0 {
+		log.Fatalf("Proxy timeout must be a positive integer: %v", raw[1])
+	}
+	timeout := uint(timeoutF)
+
+	// Assume SOCKS5 if no scheme is given
+	if !strings.Contains(urlStr, "//") {
+		urlStr = "socks5://" + urlStr
+	}
+	addr, err := url.Parse(urlStr)
+	if err != nil {
+		log.Fatalf("Invalid proxy %s: %s", urlStr, err)
+	}
+	if addr.Port() == "" {
+		log.Fatalf("Port number is missing: %s", urlStr)
+	}
+	addr.Scheme = strings.ToLower(addr.Scheme)
+	switch addr.Scheme {
+	case "", "socks", "socks5", "socks5h":
+		addr.Scheme = "socks5"
+	case "http", "https":
+	default:
+		log.Fatalf("Unsupported proxy scheme %s", addr.Scheme)
+	}
+	routeName := fmt.Sprintf("Route %d", route)
+	logger.Printf("%s server %s (%s, Tier %d, Timeout %ds)", addr.Scheme, addr.Host, routeName, tier, timeout)
+	return server{addr: addr, route: route, tier: tier, timeout: timeout}
 }
