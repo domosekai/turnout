@@ -28,9 +28,6 @@ var configFile = flag.String("c", "", "Path to JSON config file containing proxy
 var tproxy = flag.Bool("t", false, "Use TPROXY in addition to REDIRECT mode for transparent proxy (Linux only)")
 var hostFile = flag.String("host", "", "File containing custom rules based on hostnames")
 var ipFile = flag.String("ip", "", "File containing custom rules based on IP/CIDRs")
-var r1Priority = flag.Float64("T0", 1, "Time (seconds) during which route 1 is prioritized (TLS only)")
-var r1Timeout = flag.Uint("T1", 3, "Connection timeout (seconds) for route 1")
-var force4 = flag.Bool("4", false, "Force IPv4 connections out of route 1")
 var logFile = flag.String("log", "", "Path to log file")
 var logAppend = flag.Bool("append", false, "Append to log file if exists")
 var tickInterval = flag.Uint("tick", 30, "Logging interval (minutes) for status report")
@@ -55,19 +52,19 @@ type localConn struct {
 	host          string
 	key           string
 	destIsIP      bool
-	conn          net.Conn
+	conn          net.Conn // never nil
 	buf           *bufio.Reader
 	mode, network string
 	total         int
 }
 
 type remoteConn struct {
-	conn          *net.Conn
+	conn          *net.Conn // use pointer to allow nil value
 	first         []byte
 	firstIsFull   bool
 	firstReq      *http.Request
 	reqs          chan *http.Request
-	route, server int
+	srv           *server
 	ruleBased     bool
 	hasConnection bool
 	tls           bool
@@ -77,33 +74,65 @@ type remoteConn struct {
 }
 
 type server struct {
-	addr    *url.URL
-	route   int  // 2 or 3
-	tier    int  // tier index within its route
-	timeout uint // connection timeout in seconds
+	id      int
+	addr    *url.URL // nil for direct route
+	route   int
+	tier    int
+	timeout int
+	force4  bool // direct only: force IPv4
+}
+
+type autoConfig struct {
+	Primary   int `json:"primary"`
+	Secondary int `json:"secondary"`
+	Priority  int `json:"priority"`
+}
+
+type routeSpec struct {
+	ID      int        `json:"id"`
+	Direct  bool       `json:"direct"`
+	Timeout int        `json:"timeout"`
+	Force4  bool       `json:"force4"`
+	Tiers   [][]string `json:"tiers"`
+}
+
+type routeConfig struct {
+	id      int
+	direct  bool
+	timeout int
+	tiers   [][]*server // tiers[tier] = servers in that tier
+}
+
+type routeResult struct {
+	srv *server
+	out net.Conn
+}
+
+type doSignal struct {
+	srv *server // nil = abort all
 }
 
 var (
-	logger      Logger
-	wg          sync.WaitGroup
-	mu          sync.Mutex
-	open        [4]int // open connections
-	jobs        [4]int // working goroutines
-	sent        [4]int64
-	received    [4]int64
-	proxies     []server
-	route2Tiers [][]int // route2Tiers[tier] = indices into proxies
-	route3Tiers [][]int // route3Tiers[tier] = indices into proxies
-	maxTiers2   int
-	maxTiers3   int
-	chkPorts    []string
-	rt          routingTable
-	shdns       *net.UDPAddr
+	logger       Logger
+	wg           sync.WaitGroup
+	mu           sync.Mutex
+	open         = make(map[int]int)
+	jobs         = make(map[int]int)
+	sent         = make(map[int]int64)
+	received     = make(map[int]int64)
+	routes       = make(map[int]*routeConfig)
+	servers      []*server // indexed by server id (1-based for proxies, 0 unused)
+	autoCfg      autoConfig
+	blockedRoute int
+	chkPorts     []string
+	rt           routingTable
+	shdns        *net.UDPAddr
 )
 
 type config struct {
-	Route2 [][][]interface{} `json:"route2"`
-	Route3 [][][]interface{} `json:"route3"`
+	Routes       []routeSpec `json:"routes"`
+	Auto         autoConfig  `json:"auto"`
+	BlockedRoute int         `json:"blockedRoute"`
 }
 
 func main() {
@@ -179,11 +208,24 @@ func main() {
 		go func() {
 			c := time.Tick(time.Minute * time.Duration(*tickInterval))
 			for range c {
-				logger.Printf("STATUS Open connections per route: Local %d Remote %d / %d Special %d", open[0], open[1], open[2], open[3])
-				logger.Printf("STATUS Route 1 Sent %.1f MB Recv %.1f MB / Route 2 Sent %.1f MB Recv %.1f MB / Special Sent %.1f MB Recv %.1f MB",
-					float64(sent[1])/1000000, float64(received[1])/1000000, float64(sent[2])/1000000, float64(received[2])/1000000, float64(sent[3])/1000000, float64(received[3])/1000000)
+				logger.Printf("STATUS Open connections: Local %d", open[0])
+				for id := range routes {
+					if id != 0 {
+						logger.Printf("STATUS   Route %d: %d", id, open[id])
+					}
+				}
+				for id := range routes {
+					if id != 0 {
+						logger.Printf("STATUS Route %d Sent %.1f MB Recv %.1f MB", id, float64(sent[id])/1000000, float64(received[id])/1000000)
+					}
+				}
 				if *verbose {
-					logger.Printf("STATUS Routing entries: %d Active dispatchers: %d Workers per route: %d / %d / %d", rt.count, jobs[0], jobs[1], jobs[2], jobs[3])
+					logger.Printf("STATUS Routing entries: %d Active dispatchers: %d", rt.count, jobs[0])
+					for id := range routes {
+						if id != 0 {
+							logger.Printf("STATUS   Route %d workers: %d", id, jobs[id])
+						}
+					}
 				}
 			}
 		}()
@@ -221,62 +263,111 @@ func parseConfig(path string) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		log.Fatalf("Failed to parse config file %s: %s", path, err)
 	}
-	if len(cfg.Route2) == 0 {
-		log.Fatal("At least 1 tier with 1 proxy is needed in route2")
-	}
-	for _, tier := range cfg.Route2 {
-		if len(tier) == 0 {
-			log.Fatal("Empty tier in route2")
-		}
-	}
-	for _, tier := range cfg.Route3 {
-		if len(tier) == 0 {
-			log.Fatal("Empty tier in route3")
-		}
+	if len(cfg.Routes) == 0 {
+		log.Fatal("At least one route is required")
 	}
 
-	// Parse Route 2 proxies
-	for ti, tier := range cfg.Route2 {
-		var indices []int
-		for _, raw := range tier {
-			s := parseProxyURL(raw, 2, ti)
-			proxies = append(proxies, s)
-			indices = append(indices, len(proxies)-1)
+	// Parse routes
+	hasDirect := false
+	servers = make([]*server, 1) // index 0 reserved for direct route
+	for _, spec := range cfg.Routes {
+		if spec.ID <= 0 {
+			log.Fatalf("Route ID must be positive: %d", spec.ID)
 		}
-		route2Tiers = append(route2Tiers, indices)
+		if _, exists := routes[spec.ID]; exists {
+			log.Fatalf("Duplicate route ID: %d", spec.ID)
+		}
+		if spec.Direct {
+			if spec.ID != 1 {
+				log.Fatal("Direct route must have id 1")
+			}
+			if spec.Timeout == 0 {
+				spec.Timeout = 3
+			}
+			directSrv := &server{
+				id:      0,
+				addr:    nil,
+				route:   spec.ID,
+				tier:    0,
+				timeout: spec.Timeout,
+				force4:  spec.Force4,
+			}
+			servers[0] = directSrv
+			routes[spec.ID] = &routeConfig{
+				id:      spec.ID,
+				direct:  true,
+				timeout: spec.Timeout,
+				tiers:   [][]*server{{directSrv}},
+			}
+			hasDirect = true
+			logger.Printf("Route %d: Direct (Timeout %ds, Force4 %v)", spec.ID, spec.Timeout, spec.Force4)
+		} else {
+			if spec.Timeout == 0 {
+				log.Fatalf("Route %d: timeout is required", spec.ID)
+			}
+			if len(spec.Tiers) == 0 {
+				log.Fatalf("Route %d: at least one tier is required", spec.ID)
+			}
+			rc := &routeConfig{
+				id:      spec.ID,
+				timeout: spec.Timeout,
+			}
+			for ti, tier := range spec.Tiers {
+				if len(tier) == 0 {
+					log.Fatalf("Route %d: empty tier %d", spec.ID, ti)
+				}
+				var tierServers []*server
+				for _, serverURL := range tier {
+					addr := parseProxyURL(serverURL)
+					s := &server{
+						addr:    addr,
+						route:   spec.ID,
+						tier:    ti,
+						timeout: spec.Timeout,
+					}
+					logger.Printf("%s server %s (Route %d, Tier %d, Timeout %ds)", addr.Scheme, addr.Host, spec.ID, ti, spec.Timeout)
+					servers = append(servers, s)
+					s.id = len(servers) - 1
+					tierServers = append(tierServers, s)
+				}
+				rc.tiers = append(rc.tiers, tierServers)
+			}
+			routes[spec.ID] = rc
+		}
 	}
-	maxTiers2 = len(route2Tiers)
+	if !hasDirect {
+		log.Fatal("A direct route (id 1) is required")
+	}
 
-	// Parse Route 3 proxies
-	for ti, tier := range cfg.Route3 {
-		var indices []int
-		for _, raw := range tier {
-			s := parseProxyURL(raw, 3, ti)
-			proxies = append(proxies, s)
-			indices = append(indices, len(proxies)-1)
-		}
-		route3Tiers = append(route3Tiers, indices)
+	// Parse auto config
+	autoCfg = cfg.Auto
+	if autoCfg.Primary == 0 {
+		autoCfg.Primary = 1
 	}
-	maxTiers3 = len(route3Tiers)
+	if autoCfg.Secondary == 0 {
+		autoCfg.Secondary = 2
+	}
+	if autoCfg.Priority == 0 {
+		autoCfg.Priority = 1
+	}
+	if _, ok := routes[autoCfg.Primary]; !ok {
+		log.Fatalf("Auto primary route %d not found", autoCfg.Primary)
+	}
+	if !routes[autoCfg.Primary].direct {
+		log.Fatalf("Auto primary route %d must be a direct route", autoCfg.Primary)
+	}
+	if _, ok := routes[autoCfg.Secondary]; !ok {
+		log.Fatalf("Auto secondary route %d not found", autoCfg.Secondary)
+	}
+
+	// Parse blockedRoute
+	blockedRoute = cfg.BlockedRoute
+	if blockedRoute == 0 {
+		blockedRoute = 2
+	}
 }
 
-func parseProxyURL(raw []interface{}, route, tier int) server {
-	if len(raw) < 2 {
-		log.Fatalf("Proxy entry must be [url, timeout]: %v", raw)
-	}
-	urlStr, ok := raw[0].(string)
-	if !ok {
-		log.Fatalf("Proxy URL must be a string: %v", raw[0])
-	}
-	timeoutF, ok := raw[1].(float64)
-	if !ok {
-		log.Fatalf("Proxy timeout must be a number: %v", raw[1])
-	}
-	if timeoutF != float64(int(timeoutF)) || timeoutF <= 0 {
-		log.Fatalf("Proxy timeout must be a positive integer: %v", raw[1])
-	}
-	timeout := uint(timeoutF)
-
+func parseProxyURL(urlStr string) *url.URL {
 	// Assume SOCKS5 if no scheme is given
 	if !strings.Contains(urlStr, "//") {
 		urlStr = "socks5://" + urlStr
@@ -296,7 +387,5 @@ func parseProxyURL(raw []interface{}, route, tier int) server {
 	default:
 		log.Fatalf("Unsupported proxy scheme %s", addr.Scheme)
 	}
-	routeName := fmt.Sprintf("Route %d", route)
-	logger.Printf("%s server %s (%s, Tier %d, Timeout %ds)", addr.Scheme, addr.Host, routeName, tier, timeout)
-	return server{addr: addr, route: route, tier: tier, timeout: timeout}
+	return addr
 }

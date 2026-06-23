@@ -71,7 +71,7 @@ func (lo *localConn) handleHTTP() {
 		if err != nil {
 			if re.sent > 0 {
 				mu.Lock()
-				sent[re.route] += re.sent
+				sent[re.srv.route] += re.sent
 				mu.Unlock()
 				totalBytes += re.sent
 			}
@@ -175,7 +175,7 @@ func (lo *localConn) handleHTTP() {
 				}
 				if re.sent > 0 {
 					mu.Lock()
-					sent[re.route] += re.sent
+					sent[re.srv.route] += re.sent
 					mu.Unlock()
 					totalBytes += re.sent
 				}

@@ -230,55 +230,36 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		jobs[0]--
 		mu.Unlock()
 	}()
-	start1 := make(chan bool)
-	start2 := make([]chan bool, maxTiers2+maxTiers3)
-	for i := range start2 {
-		start2[i] = make(chan bool)
-	}
-	try1 := make(chan int, 1)
-	try2 := make(chan int, len(proxies))
-	stop2 := make(chan bool, 1)
-	do1 := make(chan int, 1)
-	do2 := make(chan int, 1)
-	var out1 net.Conn
-	out2 := make([]net.Conn, len(proxies))
-	ok1, ok2 := -1, -1
-	var available1, available2 int
 
-	// Precompute cumulative tier sizes for progression
-	route2Cum := make([]int, maxTiers2)
-	if maxTiers2 > 0 {
-		route2Cum[0] = len(route2Tiers[0])
-		for i := 1; i < maxTiers2; i++ {
-			route2Cum[i] = route2Cum[i-1] + len(route2Tiers[i])
-		}
+	type workerInfo struct {
+		srv *server
 	}
-	route3Cum := make([]int, maxTiers3)
-	if maxTiers3 > 0 {
-		route3Cum[0] = len(route3Tiers[0])
-		for i := 1; i < maxTiers3; i++ {
-			route3Cum[i] = route3Cum[i-1] + len(route3Tiers[i])
-		}
+
+	type workerGroup struct {
+		workers  []workerInfo
+		start    chan bool
+		priority *workerInfo // nil if no priority
 	}
 
 	// Match rules
-	var route int
-	var server int
+	var matchedRoute int
 	if lo.host != "" {
-		route, re.ruleBased = matchHost(lo.total, lo.mode, lo.host, lo.dport)
+		matchedRoute, re.ruleBased = matchHost(lo.total, lo.mode, lo.host, lo.dport)
 	}
-	if route == 0 {
+	if matchedRoute == 0 {
 		if ip := net.ParseIP(lo.dest); ip != nil {
 			// dest is IP, match IP rules if dns is ok or hostname is not sniffed
 			if lo.host == "" || *dnsOK {
-				route, re.ruleBased = matchIP(lo.total, lo.mode, ip, lo.dport)
+				matchedRoute, re.ruleBased = matchIP(lo.total, lo.mode, ip, lo.dport)
 			}
 		} else {
 			// dest is hostname
-			route, re.ruleBased = matchHost(lo.total, lo.mode, lo.dest, lo.dport)
+			matchedRoute, re.ruleBased = matchHost(lo.total, lo.mode, lo.dest, lo.dport)
 		}
 	}
-	if route < 0 || route > 3 {
+
+	// Validate route exists
+	if matchedRoute < 0 || (matchedRoute != 0 && routes[matchedRoute] == nil) {
 		if *verbose {
 			logger.Printf("%s %5d:  *            Route to %s is invalid or blocked", lo.mode, lo.total, lo.key)
 		}
@@ -288,12 +269,13 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	// Get existing route or a locked route
 	var entry *routeEntry
 	var exist bool
+	var existSrv *server
 	if !*fastSwitch {
-		if r, s, e, n := rt.addOrLock(lo.key, route); e {
-			route = r
-			server = s
+		if r, s, e, n := rt.addOrLock(lo.key, matchedRoute); e {
+			matchedRoute = r
+			existSrv = servers[s]
 			if *verbose {
-				logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.key, route, server)
+				logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.key, matchedRoute, s)
 			}
 			exist = true
 			entry = n
@@ -302,339 +284,228 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		}
 	}
 
-	// Dispatch workers
-	net1 := lo.network
-	net2 := lo.network
-	if *force4 {
-		net1 = "tcp4"
-	}
-	totalTimeout := 1
-	if route == 0 || route == 1 {
-		go re.handleRemote(lo, &out1, net1, int(*r1Timeout), 1, 1, start1, try1, do1, stop2)
-		totalTimeout += int(*r1Timeout)
-		available1 = 1
-	}
-	if route == 0 || route == 2 {
-		if server == 0 {
-			for tier, servers := range route2Tiers {
-				for _, s := range servers {
-					go re.handleRemote(lo, &out2[s], net2, int(proxies[s].timeout), 2, s+1, start2[tier], try2, do2, stop2)
-					totalTimeout += int(proxies[s].timeout)
-					available2++
+	// Build worker groups (flat slice)
+	var groups []workerGroup
+	totalWorkers := 0
+
+	if matchedRoute == 0 {
+		// Race mode
+		primary := routes[autoCfg.Primary]
+		secondary := routes[autoCfg.Secondary]
+		directSrv := primary.tiers[0][0]
+
+		if !re.successive {
+			// Parallel: merge direct + secondary tier 0 into one group, direct prioritized
+			g0 := workerGroup{start: make(chan bool, 1)}
+			g0.workers = append(g0.workers, workerInfo{directSrv})
+			g0.priority = &g0.workers[0]
+
+			for _, srv := range secondary.tiers[0] {
+				g0.workers = append(g0.workers, workerInfo{srv})
+			}
+			groups = append(groups, g0)
+			totalWorkers += len(g0.workers)
+
+			// Remaining secondary tiers
+			for ti := 1; ti < len(secondary.tiers); ti++ {
+				g := workerGroup{start: make(chan bool, 1)}
+				for _, srv := range secondary.tiers[ti] {
+					g.workers = append(g.workers, workerInfo{srv})
 				}
+				groups = append(groups, g)
+				totalWorkers += len(g.workers)
 			}
 		} else {
-			s := server - 1
-			go re.handleRemote(lo, &out2[s], net2, int(proxies[s].timeout), route, server, start2[proxies[s].tier], try2, do2, stop2)
-			totalTimeout += int(proxies[s].timeout)
-			available2 = 1
+			// Successive: separate groups, no priority
+			groups = append(groups, workerGroup{
+				workers: []workerInfo{{directSrv}},
+				start:   make(chan bool, 1),
+			})
+			totalWorkers++
+
+			for _, tier := range secondary.tiers {
+				for _, srv := range tier {
+					groups = append(groups, workerGroup{
+						workers: []workerInfo{{srv}},
+						start:   make(chan bool, 1),
+					})
+					totalWorkers++
+				}
+			}
 		}
-	}
-	if route == 3 {
-		if server == 0 {
-			for tier, servers := range route3Tiers {
-				for _, s := range servers {
-					go re.handleRemote(lo, &out2[s], net2, int(proxies[s].timeout), 3, s+1, start2[maxTiers2+tier], try2, do2, stop2)
-					totalTimeout += int(proxies[s].timeout)
-					available2++
+	} else {
+		// Specific matched route
+		rc := routes[matchedRoute]
+		if rc.direct {
+			srv := rc.tiers[0][0]
+			groups = append(groups, workerGroup{
+				workers: []workerInfo{{srv}},
+				start:   make(chan bool, 1),
+			})
+			totalWorkers++
+		} else if existSrv != nil && existSrv.route == matchedRoute {
+			groups = append(groups, workerGroup{
+				workers: []workerInfo{{existSrv}},
+				start:   make(chan bool, 1),
+			})
+			totalWorkers++
+		} else if re.successive {
+			for _, tier := range rc.tiers {
+				for _, srv := range tier {
+					groups = append(groups, workerGroup{
+						workers: []workerInfo{{srv}},
+						start:   make(chan bool, 1),
+					})
+					totalWorkers++
 				}
 			}
 		} else {
-			s := server - 1
-			go re.handleRemote(lo, &out2[s], net2, int(proxies[s].timeout), route, server, start2[maxTiers2+proxies[s].tier], try2, do2, stop2)
-			totalTimeout += int(proxies[s].timeout)
-			available2 = 1
+			for _, tier := range rc.tiers {
+				g := workerGroup{start: make(chan bool, 1)}
+				for _, srv := range tier {
+					g.workers = append(g.workers, workerInfo{srv})
+				}
+				groups = append(groups, g)
+				totalWorkers += len(g.workers)
+			}
 		}
 	}
 
-	// Send signal to workers
-	switch route {
-	case 0:
-		start1 <- true
-		if !re.successive && server == 0 {
-			for range route2Tiers[0] {
-				start2[0] <- true
-			}
+	if totalWorkers == 0 {
+		if len(re.first) > 0 {
+			logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
 		}
-	case 1:
-		start1 <- true
-	case 2:
-		if server == 0 {
-			if !re.successive {
-				for range route2Tiers[0] {
-					start2[0] <- true
-				}
-			} else {
-				start2[0] <- true
-			}
-		} else {
-			start2[proxies[server-1].tier] <- true
+		if !*fastSwitch {
+			rt.unlock(lo.key, entry)
 		}
-	case 3:
-		if server == 0 {
-			if !re.successive {
-				for range route3Tiers[0] {
-					start2[maxTiers2] <- true
-				}
-			} else {
-				start2[maxTiers2] <- true
-			}
-		} else {
-			start2[maxTiers2+proxies[server-1].tier] <- true
+		return false
+	}
+
+	// Create channels
+	try := make(chan routeResult, totalWorkers)
+	do := make(chan doSignal, 1)
+	stopProxy := make(chan bool, 1)
+
+	// Dispatch all workers
+	totalTimeout := 1
+	for _, g := range groups {
+		if len(g.workers) > 0 {
+			totalTimeout += int(g.workers[0].srv.timeout) // once per tier
+		}
+		for _, w := range g.workers {
+			go re.handleRemote(lo, w.srv, g.start, try, do, stopProxy)
 		}
 	}
+
+	// Start first group
+	groups[0].start <- true
 
 	// Wait for first byte from server
-	timer1 := time.NewTimer(time.Duration(float64(time.Second) * *r1Priority)) // during which route 1 is prioritized
+	timer1 := time.NewTimer(time.Second * time.Duration(autoCfg.Priority))
 	timer2 := time.NewTimer(time.Second * time.Duration(totalTimeout))
-	wait := true
-	var server2 int
-	var count2 int
-	var count3 int
+	currentGroup := 0
+	failedInGroup := 0
+	priorityDone := false
+	stopped := false
+	var winSrv *server
+	var winOut net.Conn
+
+	// Helper to use a winning server
+	useWinner := func(srv *server, out net.Conn) bool {
+		if !*fastSwitch {
+			if !exist {
+				if *verbose {
+					logger.Printf("%s %5d:     NEW     %d Save route %d server %d for %s", lo.mode, lo.total, srv.route, srv.route, srv.id, lo.key)
+				}
+				entry.save(srv.route, srv.id)
+			} else {
+				if entry.reset(srv.route, srv.id) {
+					if *verbose {
+						logger.Printf("%s %5d:      *      %d Reset counter for %s", lo.mode, lo.total, srv.route, lo.key)
+					}
+				}
+			}
+		}
+		do <- doSignal{srv}
+		re.srv = srv
+		re.conn = &out
+		return true
+	}
+
+	// Helper to move to next group
+	advanceGroup := func() bool {
+		currentGroup++
+		if currentGroup < len(groups) {
+			failedInGroup = 0
+			priorityDone = false
+			groups[currentGroup].start <- true
+			return true
+		}
+		return false
+	}
+
 	for {
-		// Make sure no channel is written twice without return
-		// and no goroutine will wait forever
 		select {
-		// This is before route 1 sends status, when it found the IP matches some rule
-		case bad2 := <-stop2:
-			if bad2 && available2 > 0 {
-				do2 <- 0
-				available2 = 0
+		case bad := <-stopProxy:
+			if bad {
+				stopped = true
+				winSrv = nil
+				winOut = nil
 			}
-		// Route 1 sends status, bad2 is set by this time
-		case ok1 = <-try1:
-			if ok1 > 0 {
-				if !*fastSwitch {
-					if !exist {
-						if *verbose {
-							logger.Printf("%s %5d:     NEW     1 Save route 1 server 1 for %s", lo.mode, lo.total, lo.key)
-						}
-						entry.save(1, 1)
-					} else {
-						if entry.reset(1, 1) {
-							if *verbose {
-								logger.Printf("%s %5d:      *      1 Reset counter for %s", lo.mode, lo.total, lo.key)
-							}
-						}
-					}
-				}
-				do1 <- 1
-				if available2 > 0 {
-					do2 <- 0
-				}
-				re.route = 1
-				re.conn = &out1
-				return true
-			}
-			available1--
-			if available2 > 0 {
-				if re.successive {
-					start2[0] <- true
-				}
-				if server2 > 0 {
-					if !*fastSwitch {
-						if !exist {
-							if *verbose {
-								logger.Printf("%s %5d:     NEW     2 Save route 2 server %d for %s", lo.mode, lo.total, server2, lo.key)
-							}
-							entry.save(2, server2)
-						} else {
-							if entry.reset(2, server2) {
-								if *verbose {
-									logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
-								}
-							}
-						}
-					}
-					do2 <- server2
-					re.route = 2
-					re.conn = &out2[server2-1]
-					re.server = server2
-					return true
+		case sig := <-try:
+			if sig.srv != nil {
+				// Worker succeeded
+				g := groups[currentGroup]
+				isPriority := g.priority != nil && sig.srv == g.priority.srv
+
+				if isPriority || priorityDone || g.priority == nil {
+					// Use immediately
+					return useWinner(sig.srv, sig.out)
+				} else if !stopped && winSrv == nil {
+					// Store as pending (only first one, unless stopped)
+					winSrv = sig.srv
+					winOut = sig.out
 				}
 			} else {
-				if !*fastSwitch {
-					if !exist {
-						if len(re.first) > 0 {
-							logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
-						}
-						rt.unlock(lo.key, entry)
-					} else {
-						if len(re.first) > 0 {
-							logger.Printf("%s %5d:     ERR     1 Existing route to %s failed", lo.mode, lo.total, lo.key)
-						}
-						rt.del(lo.key, false, route, server)
-					}
-				} else {
-					if len(re.first) > 0 {
-						logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+				// Worker failed
+				g := groups[currentGroup]
+				if g.priority != nil && sig.srv == g.priority.srv {
+					priorityDone = true
+					if winSrv != nil {
+						return useWinner(winSrv, winOut)
 					}
 				}
-				return false
-			}
-		// Route 2 sends status from any server
-		case ok2 = <-try2:
-			count2++
-			if ok2 > 0 && available2 > 0 && server2 == 0 {
-				server2 = ok2
-				if available1 == 0 {
-					var r int
-					if route == 3 {
-						r = 3
-					} else {
-						r = 2
-					}
-					if !*fastSwitch {
-						if !exist {
-							if *verbose {
-								logger.Printf("%s %5d:     NEW     %d Save route %d server %d for %s", lo.mode, lo.total, r, r, server2, lo.key)
-							}
-							entry.save(r, server2)
-						} else {
-							if entry.reset(r, server2) {
-								if *verbose {
-									logger.Printf("%s %5d:      *      %d Reset counter for %s", lo.mode, lo.total, r, lo.key)
+				failedInGroup++
+				if failedInGroup >= len(g.workers) {
+					if !advanceGroup() {
+						// All groups exhausted
+						if !*fastSwitch {
+							if !exist {
+								if len(re.first) > 0 {
+									logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
 								}
-							}
-						}
-					}
-					do2 <- server2
-					re.route = r
-					re.conn = &out2[server2-1]
-					re.server = server2
-					return true
-				} else if !wait {
-					if !*fastSwitch {
-						if !exist {
-							if *verbose {
-								logger.Printf("%s %5d:     NEW     2 Save route 2 server %d for %s", lo.mode, lo.total, server2, lo.key)
-							}
-							entry.save(2, server2)
-						} else {
-							if entry.reset(2, server2) {
-								if *verbose {
-									logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
+								rt.unlock(lo.key, entry)
+							} else {
+								if len(re.first) > 0 {
+									logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, matchedRoute, lo.key)
 								}
-							}
-						}
-					}
-					do2 <- server2
-					do1 <- 0
-					re.route = 2
-					re.conn = &out2[server2-1]
-					re.server = server2
-					return true
-				}
-			} else {
-				if ok2 == 0 {
-					available2--
-				}
-				if available2 > 0 && server2 == 0 {
-					// Determine if this was a Route 3 server
-					isRoute3 := false
-					if maxTiers3 > 0 {
-						firstR3 := route3Tiers[0][0]
-						lastR3 := route3Tiers[maxTiers3-1][len(route3Tiers[maxTiers3-1])-1]
-						if ok2 == 0 {
-							// failed, check count3
-						} else if ok2-1 >= firstR3 && ok2-1 <= lastR3 {
-							isRoute3 = true
-						}
-					}
-					if isRoute3 || (ok2 == 0 && route == 3) {
-						count3++
-						if re.successive {
-							for i := 1; i < maxTiers3; i++ {
-								if count3 < route3Cum[i] {
-									start2[maxTiers2+i] <- true
-									break
-								}
+								rt.del(lo.key, false, matchedRoute, 0)
 							}
 						} else {
-							for i := 1; i < maxTiers3; i++ {
-								if count3 == route3Cum[i-1] {
-									for range route3Tiers[i] {
-										start2[maxTiers2+i] <- true
-									}
-									break
-								}
-							}
-						}
-					} else {
-						count2++
-						if re.successive {
-							for i := 1; i < maxTiers2; i++ {
-								if count2 < route2Cum[i] {
-									start2[i] <- true
-									break
-								}
-							}
-						} else {
-							for i := 1; i < maxTiers2; i++ {
-								if count2 == route2Cum[i-1] {
-									for range route2Tiers[i] {
-										start2[i] <- true
-									}
-									break
-								}
-							}
-						}
-					}
-				} else if available1 == 0 {
-					if !*fastSwitch {
-						if !exist {
 							if len(re.first) > 0 {
 								logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
 							}
-							rt.unlock(lo.key, entry)
-						} else {
-							if len(re.first) > 0 {
-								logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, route, lo.key)
-							}
-							rt.del(lo.key, false, route, server)
 						}
-					} else {
-						if len(re.first) > 0 {
-							logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
-						}
+						return false
 					}
-					return false
 				}
 			}
-		// Priority period for route 1 ends
 		case <-timer1.C:
-			wait = false
-			if server2 > 0 && available2 > 0 {
-				if !*fastSwitch {
-					if !exist {
-						if *verbose {
-							logger.Printf("%s %5d:     NEW     2 Save route 2 server %d for %s", lo.mode, lo.total, server2, lo.key)
-						}
-						entry.save(2, server2)
-					} else {
-						if entry.reset(2, server2) {
-							if *verbose {
-								logger.Printf("%s %5d:      *      2 Reset counter for %s", lo.mode, lo.total, lo.key)
-							}
-						}
-					}
-				}
-				do2 <- server2
-				if available1 > 0 {
-					do1 <- 0
-				}
-				re.route = 2
-				re.conn = &out2[server2-1]
-				re.server = server2
-				return true
+			if winSrv != nil && !stopped {
+				return useWinner(winSrv, winOut)
 			}
 		case <-timer2.C:
-			if available1 > 0 {
-				do1 <- 0
-			}
-			if available2 > 0 {
-				do2 <- 0
-			}
+			do <- doSignal{nil}
 			if !*fastSwitch {
 				if !exist {
 					if len(re.first) > 0 {
@@ -643,9 +514,9 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					rt.unlock(lo.key, entry)
 				} else {
 					if len(re.first) > 0 {
-						logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, route, lo.key)
+						logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, matchedRoute, lo.key)
 					}
-					rt.del(lo.key, false, route, server)
+					rt.del(lo.key, false, matchedRoute, 0)
 				}
 			} else {
 				if len(re.first) > 0 {
@@ -693,91 +564,96 @@ func (re *remoteConn) relayLocalFor(lo localConn) {
 		}
 	}
 	mu.Lock()
-	sent[re.route] += totalBytes
+	sent[re.srv.route] += totalBytes
 	mu.Unlock()
 	(*re.conn).Close()
 }
 
-func (re *remoteConn) handleRemote(lo localConn, out *net.Conn, network string, timeout, route, server int, start chan bool, try, do chan int, stop2 chan bool) {
+func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, try chan routeResult, do chan doSignal, stopProxy chan bool) {
 	mu.Lock()
-	jobs[route]++
+	jobs[srv.route]++
 	mu.Unlock()
 
 	select {
 	case <-start:
-		firstResp, firstIn, bufOut, sentTime, ok, stop := re.fetchResponse(lo, out, network, timeout, route, server)
-		if stop {
-			stop2 <- true
+		start <- true // put back for next worker
+		out, firstResp, firstIn, bufOut, sentTime, ok, shouldStop := re.fetchResponse(lo, srv)
+		if shouldStop {
+			stopProxy <- true
 		}
 		if ok {
-			try <- server
+			try <- routeResult{srv, out}
 			mu.Lock()
-			open[route]++
+			open[srv.route]++
 			mu.Unlock()
 
 			// Wait for signal to go ahead
-			doServer := <-do
-			do <- doServer
-			if doServer == server {
+			sig := <-do
+			do <- sig
+			if sig.srv == srv {
 				re.lastReq = sentTime
 				if *verbose {
-					logger.Printf("%s %5d:     CON     %d Continue %s %s -> %s", lo.mode, lo.total, route, (*out).LocalAddr().Network(), (*out).LocalAddr(), (*out).RemoteAddr())
+					logger.Printf("%s %5d:     CON     %d Continue %s %s -> %s", lo.mode, lo.total, srv.route, out.LocalAddr().Network(), out.LocalAddr(), out.RemoteAddr())
 				}
 
-				re.relayConnection(lo, out, route, sentTime, firstResp, firstIn, bufOut)
+				re.relayConnection(lo, out, srv.route, sentTime, firstResp, firstIn, bufOut)
 
 				if !*fastSwitch {
 					rt.del(lo.key, true, 0, 0)
 					if *verbose {
-						logger.Printf("%s %5d:          *  %d Deleted route to %s", lo.mode, lo.total, route, lo.key)
+						logger.Printf("%s %5d:          *  %d Deleted route to %s", lo.mode, lo.total, srv.route, lo.key)
 					}
 				}
 			}
 
-			(*out).Close()
+			out.Close()
 			mu.Lock()
-			open[route]--
+			open[srv.route]--
 			mu.Unlock()
 		} else {
-			try <- 0
-			if *out != nil {
-				(*out).Close()
+			try <- routeResult{nil, nil}
+			if out != nil {
+				out.Close()
 			}
 		}
-	case s := <-do:
-		do <- s
+	case sig := <-do:
+		do <- sig
 	}
 
 	mu.Lock()
-	jobs[route]--
+	jobs[srv.route]--
 	mu.Unlock()
 }
 
-func (re *remoteConn) fetchResponse(lo localConn, out *net.Conn, network string, timeout, route, server int) (firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader, sentTime time.Time, ok bool, stop bool) {
+func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader, sentTime time.Time, ok bool, stop bool) {
+	network := lo.network
+	if srv.force4 {
+		network = "tcp4"
+	}
+
 	var err error
-	if route == 1 {
+	if srv.addr == nil {
+		// Direct route
 		dp := net.JoinHostPort(lo.dest, lo.dport)
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s", lo.mode, lo.total, route, network, dp)
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s", lo.mode, lo.total, srv.route, network, dp)
 		}
 		// it's possible to use client's address as source but we need to fix the return route
 		// useful when turnout is sitting between client and upstream
 		dialer := &net.Dialer{
-			Timeout: time.Second * time.Duration(timeout),
+			Timeout: time.Second * time.Duration(srv.timeout),
 			//LocalAddr: lo.source,
 			//Control:   transparentControl,
 		}
-		*out, err = dialer.Dial(network, dp)
-	} else if proxies[server-1].addr.Scheme == "socks5" {
+		out, err = dialer.Dial(network, dp)
+	} else if srv.addr.Scheme == "socks5" {
 		// SOCKS5
-		server := proxies[server-1]
-		// URL.Host is hostname:port
-		addr := server.addr.Host
+		addr := srv.addr.Host
 		var dialer proxy.Dialer
 		var auth *proxy.Auth
-		if server.addr.User != nil {
+		if srv.addr.User != nil {
 			auth = new(proxy.Auth)
-			auth.User = server.addr.User.Username()
+			auth.User = srv.addr.User.Username()
 			// replace username with client IP if it's "CLIENT_IP"
 			if auth.User == "CLIENT_IP" {
 				switch addr := lo.conn.RemoteAddr().(type) {
@@ -787,27 +663,26 @@ func (re *remoteConn) fetchResponse(lo localConn, out *net.Conn, network string,
 					auth.User = addr.IP.String()
 				}
 			}
-			if p, ok := server.addr.User.Password(); ok {
+			if p, ok := srv.addr.User.Password(); ok {
 				auth.Password = p
 			}
 		}
-		dialer, err = proxy.SOCKS5("tcp", addr, auth, &net.Dialer{Timeout: time.Second * time.Duration(timeout)})
+		dialer, err = proxy.SOCKS5("tcp", addr, auth, &net.Dialer{Timeout: time.Second * time.Duration(srv.timeout)})
 		if err != nil {
-			logger.Printf("%s %5d: ERR         %d Failed to dial server %s. Error: %s", lo.mode, lo.total, route, addr, err)
+			logger.Printf("%s %5d: ERR         %d Failed to dial server %s. Error: %s", lo.mode, lo.total, srv.route, addr, err)
 			return
 		}
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, route, network, lo.key, addr)
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, srv.route, network, lo.key, addr)
 		}
-		*out, err = dialer.Dial(network, lo.key)
+		out, err = dialer.Dial(network, lo.key)
 	} else {
 		// HTTP or HTTPS
-		server := proxies[server-1]
-		addr := server.addr.Host
+		addr := srv.addr.Host
 		var auth http_dialer.ProxyAuthorization
-		if server.addr.User != nil {
-			user := server.addr.User.Username()
-			password, _ := server.addr.User.Password()
+		if srv.addr.User != nil {
+			user := srv.addr.User.Username()
+			password, _ := srv.addr.User.Password()
 			auth = http_dialer.AuthBasic(user, password)
 		}
 		// Optional TLS configuration
@@ -815,45 +690,45 @@ func (re *remoteConn) fetchResponse(lo localConn, out *net.Conn, network string,
 			//			MinVersion: tls.VersionTLS10,
 			//			NextProtos: []string{"http/1.1"},
 		}
-		dialer := http_dialer.New(server.addr,
+		dialer := http_dialer.New(srv.addr,
 			http_dialer.WithProxyAuth(auth),
 			http_dialer.WithTls(&tlsConfig),
-			http_dialer.WithConnectionTimeout(time.Second*time.Duration(timeout)))
+			http_dialer.WithConnectionTimeout(time.Second*time.Duration(srv.timeout)))
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, route, network, lo.key, addr)
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, srv.route, network, lo.key, addr)
 		}
 		// HTTP dialer only accepts tcp as network
-		*out, err = dialer.Dial("tcp", lo.key)
+		out, err = dialer.Dial("tcp", lo.key)
 	}
 	if err != nil {
 		if strings.Contains(err.Error(), "time") || strings.Contains(err.Error(), "host unreachable") {
 			if *verbose {
-				logger.Printf("%s %5d: SYN         %d Initial connection timeout", lo.mode, lo.total, route)
+				logger.Printf("%s %5d: SYN         %d Initial connection timeout", lo.mode, lo.total, srv.route)
 			}
 		} else if strings.Contains(err.Error(), "refused") || strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "EOF") {
 			// Linux: "connect: connection refused"
 			// Windows: "connectex: No connection could be made because the target machine actively refused it."
 			if *verbose {
-				logger.Printf("%s %5d: FIN         %d Initial connection refused", lo.mode, lo.total, route)
+				logger.Printf("%s %5d: FIN         %d Initial connection refused", lo.mode, lo.total, srv.route)
 			}
 		} else if strings.Contains(err.Error(), "no such host") {
 			if *verbose {
-				logger.Printf("%s %5d: NXD         %d Domain lookup failed", lo.mode, lo.total, route)
+				logger.Printf("%s %5d: NXD         %d Domain lookup failed", lo.mode, lo.total, srv.route)
 			}
 		} else {
 			if *verbose {
-				logger.Printf("%s %5d: ERR         %d Failed to dial server. Error: %s", lo.mode, lo.total, route, err)
+				logger.Printf("%s %5d: ERR         %d Failed to dial server. Error: %s", lo.mode, lo.total, srv.route, err)
 			}
 		}
 		return
 	}
 	if *verbose {
-		logger.Printf("%s %5d:  *          %d TCP connection established", lo.mode, lo.total, route)
+		logger.Printf("%s %5d:  *          %d TCP connection established", lo.mode, lo.total, srv.route)
 	}
 
 	// dest is hostname, match IP rules before sending first byte if DNS is ok
-	if route == 1 && !re.ruleBased && !lo.destIsIP && *dnsOK {
-		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+	if srv.route == 1 && !re.ruleBased && !lo.destIsIP && *dnsOK {
+		if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
 			newRoute, re.ruleBased = matchIP(lo.total, lo.mode, tcpAddr.IP, lo.dport)
 			switch newRoute {
@@ -871,25 +746,25 @@ func (re *remoteConn) fetchResponse(lo localConn, out *net.Conn, network string,
 
 	// Send first byte to server
 	if len(re.first) > 0 {
-		(*out).SetWriteDeadline(time.Now().Add(time.Second * time.Duration(timeout)))
-		if _, err := (*out).Write(re.first); err != nil {
+		out.SetWriteDeadline(time.Now().Add(time.Second * time.Duration(srv.timeout)))
+		if _, err := out.Write(re.first); err != nil {
 			if *verbose {
-				logger.Printf("%s %5d: ERR         %d Failed to send first byte to server. Error: %s", lo.mode, lo.total, route, err)
+				logger.Printf("%s %5d: ERR         %d Failed to send first byte to server. Error: %s", lo.mode, lo.total, srv.route, err)
 			}
 			return
 		}
-		(*out).SetWriteDeadline(time.Time{})
+		out.SetWriteDeadline(time.Time{})
 	}
 	sentTime = time.Now()
 
 	// Wait for response from server
 	firstIn = make([]byte, initialSize)
-	bufOut = bufio.NewReader(*out)
+	bufOut = bufio.NewReader(out)
 	n := 0
 	if re.firstIsFull {
-		(*out).SetReadDeadline(time.Now().Add(time.Millisecond * 300))
+		out.SetReadDeadline(time.Now().Add(time.Millisecond * 300))
 	} else {
-		(*out).SetReadDeadline(time.Now().Add(time.Second * time.Duration(timeout)))
+		out.SetReadDeadline(time.Now().Add(time.Second * time.Duration(srv.timeout)))
 	}
 	var ttfb time.Duration
 	if lo.mode == "H" && re.firstReq != nil {
@@ -899,11 +774,11 @@ func (re *remoteConn) fetchResponse(lo localConn, out *net.Conn, network string,
 		n, err = bufOut.Read(firstIn)
 		ttfb = time.Since(sentTime)
 		if n > 0 && *verbose {
-			logger.Printf("%s %5d:      *      %d First %d bytes from server. TTFB %d ms.", lo.mode, lo.total, route, n, ttfb.Milliseconds())
+			logger.Printf("%s %5d:      *      %d First %d bytes from server. TTFB %d ms.", lo.mode, lo.total, srv.route, n, ttfb.Milliseconds())
 		}
 		// Continue reading for a short period of time to detect delayed reset
-		if err == nil && route == 1 && !re.ruleBased && n > 0 && n < initialSize {
-			(*out).SetReadDeadline(time.Now().Add(time.Millisecond * time.Duration(*firstByteDelay)))
+		if err == nil && srv.route == 1 && !re.ruleBased && n > 0 && n < initialSize {
+			out.SetReadDeadline(time.Now().Add(time.Millisecond * time.Duration(*firstByteDelay)))
 			var n1 int
 			n1, err = io.ReadFull(bufOut, firstIn[n:])
 			n += n1
@@ -912,41 +787,41 @@ func (re *remoteConn) fetchResponse(lo localConn, out *net.Conn, network string,
 			}
 		}
 	}
-	(*out).SetReadDeadline(time.Time{})
+	out.SetReadDeadline(time.Time{})
 
 	if err != nil {
 		// If request is only partially sent, timeout is normal
 		if !re.firstIsFull || !strings.Contains(err.Error(), "time") {
 			if strings.Contains(err.Error(), "read") && strings.Contains(err.Error(), "reset") || strings.Contains(err.Error(), "forcibly") && strings.Contains(err.Error(), "remote") {
 				if *verbose {
-					logger.Printf("%s %5d:     RST     %d First byte reset", lo.mode, lo.total, route)
+					logger.Printf("%s %5d:     RST     %d First byte reset", lo.mode, lo.total, srv.route)
 				}
-				/*if route == 1 && !re.ruleBased {
-					if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+				/*if srv.route == 1 && !re.ruleBased {
+					if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 						if lo.host == "" || *dnsOK {
-							logger.Printf("%s %5d:     ADD     %d TCP reset detected, %s %s port %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP, lo.dport)
+							logger.Printf("%s %5d:     ADD     %d TCP reset detected, %s %s port %s added to blocked list", lo.mode, lo.total, srv.route, lo.host, tcpAddr.IP, lo.dport)
 							blockedIPSet.add(tcpAddr.IP, lo.dport)
 						} else {
-							logger.Printf("%s %5d:     ADD     %d TCP reset detected, %s port %s added to blocked list", lo.mode, lo.total, route, lo.host, lo.dport)
+							logger.Printf("%s %5d:     ADD     %d TCP reset detected, %s port %s added to blocked list", lo.mode, lo.total, srv.route, lo.host, lo.dport)
 						}
 						blockedHostSet.add(lo.host, lo.dport)
 					}
 				}*/
 			} else if strings.Contains(err.Error(), "time") {
 				if *verbose {
-					logger.Printf("%s %5d:     PSH     %d First byte timeout", lo.mode, lo.total, route)
+					logger.Printf("%s %5d:     PSH     %d First byte timeout", lo.mode, lo.total, srv.route)
 				}
 			} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				if *verbose {
-					logger.Printf("%s %5d:     FIN     %d First byte from server is EOF", lo.mode, lo.total, route)
+					logger.Printf("%s %5d:     FIN     %d First byte from server is EOF", lo.mode, lo.total, srv.route)
 				}
 			} else if !strings.Contains(err.Error(), "closed") {
 				if *verbose {
-					logger.Printf("%s %5d:     ERR     %d Connection closed before receiving first byte. Error: %s", lo.mode, lo.total, route, err)
+					logger.Printf("%s %5d:     ERR     %d Connection closed before receiving first byte. Error: %s", lo.mode, lo.total, srv.route, err)
 				}
 			} else {
 				if *verbose {
-					logger.Printf("%s %5d:     ERR     %d Error in receiving first byte. Error: %s", lo.mode, lo.total, route, err)
+					logger.Printf("%s %5d:     ERR     %d Error in receiving first byte. Error: %s", lo.mode, lo.total, srv.route, err)
 				}
 			}
 			return
@@ -956,11 +831,11 @@ func (re *remoteConn) fetchResponse(lo localConn, out *net.Conn, network string,
 		re.firstIsFull = false
 		if lo.mode == "H" && re.firstReq != nil {
 			if *verbose {
-				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms.", lo.total, route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
+				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms.", lo.total, srv.route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
 			}
-			if route == 1 && !re.ruleBased && httpRules.findRouteForText(firstResp.Status, false) == 2 {
+			if srv.route == 1 && !re.ruleBased && httpRules.findRouteForText(firstResp.Status, false) == 2 {
 				if *verbose {
-					logger.Printf("%s %5d:      *      %d HTTP status in blocklist", lo.mode, lo.total, route)
+					logger.Printf("%s %5d:      *      %d HTTP status in blocklist", lo.mode, lo.total, srv.route)
 				}
 				return
 			}
@@ -968,19 +843,19 @@ func (re *remoteConn) fetchResponse(lo localConn, out *net.Conn, network string,
 			if re.firstReq != nil {
 				if resp, err := readResponseStatus(bufio.NewReader(bytes.NewReader(firstIn[:n]))); err == nil {
 					if *verbose {
-						logger.Printf("%s %5d:      *      %d HTTP Status %s", lo.mode, lo.total, route, resp.Status)
+						logger.Printf("%s %5d:      *      %d HTTP Status %s", lo.mode, lo.total, srv.route, resp.Status)
 					}
-					if route == 1 && !re.ruleBased && httpRules.findRouteForText(resp.Status, false) == 2 {
+					if srv.route == 1 && !re.ruleBased && httpRules.findRouteForText(resp.Status, false) == 2 {
 						if *verbose {
-							logger.Printf("%s %5d:      *      %d HTTP status in blocklist", lo.mode, lo.total, route)
+							logger.Printf("%s %5d:      *      %d HTTP status in blocklist", lo.mode, lo.total, srv.route)
 						}
 						return
 					}
 				} else {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d Bad HTTP response from %s. Error: %s", lo.mode, lo.total, route, lo.key, err)
+						logger.Printf("%s %5d:     ERR     %d Bad HTTP response from %s. Error: %s", lo.mode, lo.total, srv.route, lo.key, err)
 					}
-					if route == 1 && !re.ruleBased {
+					if srv.route == 1 && !re.ruleBased {
 						return
 					}
 				}
@@ -991,18 +866,18 @@ func (re *remoteConn) fetchResponse(lo localConn, out *net.Conn, network string,
 					// Just remove trailing check in unmarshal functions
 					if m := new(serverHelloMsg); m.unmarshal(firstIn[recordHeaderLen:n]) {
 						if *verbose {
-							logger.Printf("%s %5d:      *      %d %s Server Hello", lo.mode, lo.total, route, m.verString)
+							logger.Printf("%s %5d:      *      %d %s Server Hello", lo.mode, lo.total, srv.route, m.verString)
 						}
 					}
 				} else if n > recordHeaderLen+1 && recordType(firstIn[0]) == recordTypeAlert {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d TLS Alert from %s: %s", lo.mode, lo.total, route, lo.key, alertText[alert(firstIn[recordHeaderLen+1])])
+						logger.Printf("%s %5d:     ERR     %d TLS Alert from %s: %s", lo.mode, lo.total, srv.route, lo.key, alertText[alert(firstIn[recordHeaderLen+1])])
 					}
 				} else {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d Bad TLS handshake from %s", lo.mode, lo.total, route, lo.key)
+						logger.Printf("%s %5d:     ERR     %d Bad TLS handshake from %s", lo.mode, lo.total, srv.route, lo.key)
 					}
-					if route == 1 && !re.ruleBased {
+					if srv.route == 1 && !re.ruleBased {
 						return
 					}
 				}
@@ -1011,8 +886,8 @@ func (re *remoteConn) fetchResponse(lo localConn, out *net.Conn, network string,
 	}
 
 	// Match IP rules after TLS and HTTP check if DNS is not OK and hostname is available
-	if route == 1 && !re.ruleBased && !*dnsOK && lo.host != "" {
-		if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+	if srv.route == 1 && !re.ruleBased && !*dnsOK && lo.host != "" {
+		if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
 			newRoute, re.ruleBased = matchIP(lo.total, lo.mode, tcpAddr.IP, lo.dport)
 			switch newRoute {
@@ -1033,7 +908,7 @@ func (re *remoteConn) fetchResponse(lo localConn, out *net.Conn, network string,
 	return
 }
 
-func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, sentTime time.Time, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader) {
+func (re *remoteConn) relayConnection(lo localConn, out net.Conn, route int, sentTime time.Time, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader) {
 	// Drain channel so that sender will not block
 	defer func() {
 		for len(re.reqs) > 0 {
@@ -1083,7 +958,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 							logger.Printf("H %5d:         RST %d Remote connection reset. Received %d bytes in %.1f s, %.1f s since last request. Error: %s", lo.total, route, totalBytes, totalTime.Seconds(), time.Since(re.lastReq).Seconds(), err)
 						}
 						if route == 1 && !re.ruleBased && totalTime.Seconds() < blockSafeTime {
-							if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+							if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 								if lo.host == "" || *dnsOK {
 									logger.Printf("H %5d:         ADD %d TCP reset detected, %s %s port %s added to blocked list", lo.total, route, lo.host, tcpAddr.IP, lo.dport)
 									blockedIPSet.add(tcpAddr.IP, lo.dport)
@@ -1104,7 +979,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 					mu.Lock()
 					received[route] += totalBytes
 					mu.Unlock()
-					(*out).Close()
+					out.Close()
 					if len(re.reqs) > 0 {
 						lo.conn.Close()
 					}
@@ -1142,7 +1017,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 				}
 				totalBytes += int64(bufOut.Buffered())
 				bufOut.Discard(bufOut.Buffered())
-				(*out).Close()
+				out.Close()
 				lo.conn.Close()
 				continue
 			}
@@ -1152,7 +1027,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 			}
 			if resp.ContentLength == -1 && len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked" {
 				cr := newChunkedReader(bufOut)
-				n, bytes, err := cr.copyTo(lo, *re, (*out).RemoteAddr(), route, accum)
+				n, bytes, err := cr.copyTo(lo, *re, out.RemoteAddr(), route, accum)
 				accum += bytes
 				totalBytes += bytes
 				if err == nil || errors.Is(err, io.EOF) {
@@ -1166,7 +1041,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 							logger.Printf("H %5d:     RST     %d Chunks parsing reset by server, %.1f s since last request. Error: %s", lo.total, route, time.Since(re.lastReq).Seconds(), err)
 						}
 						if route == 1 && !re.ruleBased {
-							if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+							if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 								logger.Printf("H %5d:     ADD     %d TCP reset detected, %s %s port %s added to blocked list", lo.total, route, lo.host, tcpAddr.IP, lo.dport)
 								blockedIPSet.add(tcpAddr.IP, lo.dport)
 								blockedHostSet.add(lo.host, lo.dport)
@@ -1182,7 +1057,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 					}
 					totalBytes += int64(bufOut.Buffered())
 					bufOut.Discard(bufOut.Buffered())
-					(*out).Close()
+					out.Close()
 					lo.conn.Close()
 					continue
 				}
@@ -1198,7 +1073,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 					}
 				}
 			} else if resp.ContentLength != 0 && resp.Request.Method != "HEAD" {
-				bytes, err := re.writeTo(lo, resp.Body, true, (*out).RemoteAddr(), route, accum)
+				bytes, err := re.writeTo(lo, resp.Body, true, out.RemoteAddr(), route, accum)
 				accum += bytes
 				totalBytes += bytes
 				resp.Body.Close()
@@ -1211,7 +1086,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 							logger.Printf("H %5d:     RST     %d HTTP body fetching reset by server, %.1f s since last request. Error: %s", lo.total, route, time.Since(re.lastReq).Seconds(), err)
 						}
 						if route == 1 && !re.ruleBased {
-							if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+							if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 								logger.Printf("H %5d:     ADD     %d TCP reset detected, %s %s port %s added to blocked list", lo.total, route, lo.host, tcpAddr.IP, lo.dport)
 								blockedIPSet.add(tcpAddr.IP, lo.dport)
 								blockedHostSet.add(lo.host, lo.dport)
@@ -1227,7 +1102,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 					}
 					totalBytes += int64(bufOut.Buffered())
 					bufOut.Discard(bufOut.Buffered())
-					(*out).Close()
+					out.Close()
 					lo.conn.Close()
 					continue
 				}
@@ -1238,7 +1113,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 		}
 	} else {
 		lo.conn.Write(firstIn)
-		bytes, err := re.writeTo(lo, bufOut, false, (*out).RemoteAddr(), route, int64(len(firstIn)))
+		bytes, err := re.writeTo(lo, bufOut, false, out.RemoteAddr(), route, int64(len(firstIn)))
 		totalBytes := int64(len(firstIn)) + bytes + int64(bufOut.Buffered())
 		totalTime := time.Since(sentTime)
 		if err == nil || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "time") {
@@ -1247,7 +1122,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 			}
 			//t := time.Since(re.lastReq).Seconds()
 			/*if route == 1 && !re.ruleBased && re.tls && totalBytes == int64(n) && totalTime.Seconds() > 30 && !re.lastReq.Equal(sentTime) {
-				if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+				if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 					if lo.host == "" || *dnsOK {
 						logger.Printf("%s %5d:         ADD %d TLS handshake cut off, %s %s port %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP, lo.dport)
 						blockedIPSet.add(tcpAddr.IP, lo.dport)
@@ -1257,7 +1132,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 					blockedHostSet.add(lo.host, lo.dport)
 				}
 			} else if route == 1 && !re.ruleBased && t > 30 && totalBytes > 0 && totalBytes < 1000 {
-				if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+				if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 					logger.Printf("%s %5d:         ERR %d Connection to %s %s likely cut off, %.1f s since last request", lo.mode, lo.total, route, lo.host, tcpAddr, t)
 					/*logger.Printf("%s %5d:         ADD %d Connection likely cut off, %.1f s since last request, %s %s added to blocked list", mode, total, route, t, host, tcpAddr.IP)
 					blockedIPSet.add(tcpAddr.IP)
@@ -1269,7 +1144,7 @@ func (re *remoteConn) relayConnection(lo localConn, out *net.Conn, route int, se
 				logger.Printf("%s %5d:         RST %d Remote connection reset. Received %d bytes in %.1f s, %.1f s since last request. Error: %s", lo.mode, lo.total, route, totalBytes, totalTime.Seconds(), time.Since(re.lastReq).Seconds(), err)
 			}
 			if route == 1 && !re.ruleBased && totalTime.Seconds() < blockSafeTime {
-				if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+				if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 					if lo.host == "" || *dnsOK {
 						logger.Printf("%s %5d:         ADD %d TCP reset detected, %s %s port %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP, lo.dport)
 						blockedIPSet.add(tcpAddr.IP, lo.dport)
@@ -1306,14 +1181,14 @@ func matchHost(total int, mode, host, port string) (route int, ruleBased bool) {
 		}
 	}
 	if blockedHostSet.find(host, port, false) {
-		route = 2
+		route = blockedRoute
 		if *verbose {
 			logger.Printf("%s %5d: SET           Host %s port %s found in blocked list. Select route %d", mode, total, host, port, route)
 		}
 		return
 	}
 	if slowHostSet.find(host, port, false) {
-		route = 2
+		route = blockedRoute
 		if *verbose {
 			logger.Printf("%s %5d: SET           Host %s port %s found in slow list. Select route %d", mode, total, host, port, route)
 		}
@@ -1334,14 +1209,14 @@ func matchIP(total int, mode string, ip net.IP, port string) (route int, ruleBas
 		}
 	}
 	if blockedIPSet.find(ip, port, false) {
-		route = 2
+		route = blockedRoute
 		if *verbose {
 			logger.Printf("%s %5d: SET           IP %s port %s found in blocked list. Select route %d", mode, total, ip, port, route)
 		}
 		return
 	}
 	if slowIPSet.find(ip, port, false) {
-		route = 2
+		route = blockedRoute
 		if *verbose {
 			logger.Printf("%s %5d: SET           IP %s port %s found in slow list. Select route %d", mode, total, ip, port, route)
 		}

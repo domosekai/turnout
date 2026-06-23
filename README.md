@@ -109,8 +109,19 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
   ```json
   {
-    "route2": [
-      [["127.0.0.1:1080", 5]]
+    "routes": [
+      {
+        "id": 1,
+        "direct": true,
+        "timeout": 3
+      },
+      {
+        "id": 2,
+        "timeout": 5,
+        "tiers": [
+          ["127.0.0.1:1080"]
+        ]
+      }
     ]
   }
   ```
@@ -139,15 +150,26 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   ip route add local 0.0.0.0/0 dev lo table 100
   ```
   
-  Multiple proxies can be configured to provide fail-over function. Multiple tiers can be set and lower tier servers are only used if higher tier servers fail. In this example, 192.168.1.1:1080 is set as tier-0 server and 192.168.2.1:1080 and 192.168.2.1:1081 are tier-1 servers. Once 192.168.1.1:1080 fails, these two servers will be tried at the same time and the faster one will convey the traffic. You can set tiers according to the prices of the servers, for example. Each server also has its own connection timeout (in seconds).
+  Multiple proxies can be configured to provide fail-over function. Multiple tiers can be set and lower tier servers are only used if higher tier servers fail. In this example, 192.168.1.1:1080 is set as tier-0 server and 192.168.2.1:1080 and 192.168.2.1:1081 are tier-1 servers. Once 192.168.1.1:1080 fails, these two servers will be tried at the same time and the faster one will convey the traffic. You can set tiers according to the prices of the servers, for example. Each route has its own connection timeout (in seconds).
   
   Create `config.json`:
   
   ```json
   {
-    "route2": [
-      [["192.168.1.1:1080", 3]],
-      [["192.168.2.1:1080", 5], ["192.168.2.1:1081", 5]]
+    "routes": [
+      {
+        "id": 1,
+        "direct": true,
+        "timeout": 3
+      },
+      {
+        "id": 2,
+        "timeout": 5,
+        "tiers": [
+          ["192.168.1.1:1080"],
+          ["192.168.2.1:1080", "192.168.2.1:1081"]
+        ]
+      }
     ]
   }
   ```
@@ -189,23 +211,49 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
 
 - Config file format
 
-  Proxy servers are configured via a JSON file specified with the `-c` flag. The file has two sections: `route2` for general proxy servers and `route3` for destination-specific servers (used only when rules assign route 3).
+  Routes are configured via a JSON file specified with the `-c` flag. The file contains a `routes` array defining all available routes.
   
-  Each section contains an array of tiers. Each tier is an array of proxy entries, where each entry is a two-element array of `[url, timeout]`. The timeout is the connection timeout in seconds for that server.
+  Each route has an `id` (positive integer), a `timeout` (connection timeout in seconds), and `tiers` (array of tier arrays). Route 1 must be a direct route (`"direct": true`). Proxy routes contain server URLs in their tiers.
   
-  Tier 0 servers are tried first. If all servers in a tier fail, the next tier is tried. Both Route 2 and Route 3 support an arbitrary number of tiers.
+  Tier 0 servers are tried first. If all servers in a tier fail, the next tier is tried. Routes support an arbitrary number of tiers.
+  
+  Optional top-level fields:
+  - `auto`: Automatic routing strategy with `primary`, `secondary`, and `priority` (seconds to prioritize primary)
+  - `blockedRoute`: Route ID to use for blocked/slow destinations (default: 2)
   
   ```json
   {
-    "route2": [
-      [["socks5://primary.example.com:1080", 3]],
-      [["socks5://fallback1.example.com:1080", 5], ["socks5://fallback2.example.com:1080", 5]],
-      [["http://last-resort.example.com:8080", 10]]
+    "routes": [
+      {
+        "id": 1,
+        "direct": true,
+        "timeout": 3,
+        "force4": false
+      },
+      {
+        "id": 2,
+        "timeout": 5,
+        "tiers": [
+          ["socks5://primary.example.com:1080"],
+          ["socks5://fallback1.example.com:1080", "socks5://fallback2.example.com:1080"],
+          ["http://last-resort.example.com:8080"]
+        ]
+      },
+      {
+        "id": 3,
+        "timeout": 8,
+        "tiers": [
+          ["socks5://special1.example.com:1080"],
+          ["socks5://special2.example.com:1080"]
+        ]
+      }
     ],
-    "route3": [
-      [["socks5://special1.example.com:1080", 5]],
-      [["socks5://special2.example.com:1080", 8]]
-    ]
+    "auto": {
+      "primary": 1,
+      "secondary": 2,
+      "priority": 1
+    },
+    "blockedRoute": 2
   }
   ```
 
