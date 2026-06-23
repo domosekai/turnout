@@ -38,7 +38,6 @@ var slowTimeout = flag.Uint("slowtime", 30, "Timeout (minutes) for entries in th
 var slowClose = flag.Bool("slowclose", false, "Close low speed connections immediately on route 1 (may break connections)")
 var slowDry = flag.Bool("slowdry", false, "Report low speed but do not switch route automatically")
 var blockedTimeout = flag.Uint("blocktime", 30, "Timeout (minutes) for entries in the blocked list")
-var dnsOK = flag.Bool("dnsok", false, "Trust system DNS resolver (allowing fast IP rule matching)")
 var fastSwitch = flag.Bool("fastswitch", false, "Do not enforce same route to a given destination (may break some websites)")
 var verbose = flag.Bool("verbose", false, "Verbose logging")
 var httpBadStatus = flag.String("badhttp", "", "Drop specified (non-TLS) HTTP response from route 1 (e.g. 403,404,5*)")
@@ -52,7 +51,6 @@ type localConn struct {
 	dest, dport   string
 	host          string
 	key           string
-	destIsIP      bool
 	conn          net.Conn
 	buf           *bufio.Reader
 	mode, network string
@@ -105,8 +103,9 @@ type routeConfig struct {
 }
 
 type routeResult struct {
-	srv *server
-	out net.Conn
+	srv   *server
+	out   net.Conn
+	stop2 bool
 }
 
 type doSignal struct {
@@ -221,16 +220,16 @@ func main() {
 				// Line 2: Traffic
 				trafficParts := make([]string, 0, len(ids))
 				for _, id := range ids {
-					trafficParts = append(trafficParts, fmt.Sprintf("R%d: %.1f/%.1f MB", id, float64(sent[id])/1e6, float64(received[id])/1e6))
+					trafficParts = append(trafficParts, fmt.Sprintf("R%d: %.1f / %.1f MB", id, float64(sent[id])/1e6, float64(received[id])/1e6))
 				}
-				logger.Printf("STATUS Sent/Recv %s", strings.Join(trafficParts, ", "))
+				logger.Printf("STATUS Sent / Received: %s", strings.Join(trafficParts, ", "))
 
 				// Line 3: Jobs
 				jobParts := make([]string, 0, len(ids))
 				for _, id := range ids {
 					jobParts = append(jobParts, fmt.Sprintf("R%d: %d", id, jobs[id]))
 				}
-				logger.Printf("STATUS Dispatchers %d, Workers %s", jobs[0], strings.Join(jobParts, ", "))
+				logger.Printf("STATUS Dispatchers: %d, Workers %s", jobs[0], strings.Join(jobParts, ", "))
 			}
 		}()
 	}

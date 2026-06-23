@@ -182,7 +182,6 @@ func (lo *localConn) getFirstByte() {
 
 	// Only use host as connection and routing key if dest is IP
 	if ip := net.ParseIP(lo.dest); ip != nil {
-		lo.destIsIP = true
 		if lo.host != "" {
 			lo.key = net.JoinHostPort(lo.host, lo.dport)
 		} else if host := getHostnameFromIP(ip); host != "" {
@@ -195,7 +194,6 @@ func (lo *localConn) getFirstByte() {
 			lo.key = net.JoinHostPort(lo.dest, lo.dport)
 		}
 	} else {
-		lo.destIsIP = false
 		lo.key = net.JoinHostPort(lo.dest, lo.dport)
 	}
 
@@ -248,10 +246,8 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	}
 	if matchedRoute == 0 {
 		if ip := net.ParseIP(lo.dest); ip != nil {
-			// dest is IP, match IP rules if dns is ok or hostname is not sniffed
-			if lo.host == "" || *dnsOK {
-				matchedRoute, re.ruleBased = matchIP(lo.total, lo.mode, ip, lo.dport)
-			}
+			// dest is IP, match IP rules if host hasn't matched
+			matchedRoute, re.ruleBased = matchIP(lo.total, lo.mode, ip, lo.dport)
 		} else {
 			// dest is hostname
 			matchedRoute, re.ruleBased = matchHost(lo.total, lo.mode, lo.dest, lo.dport)
@@ -384,7 +380,6 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	// Create channels
 	try := make(chan routeResult, totalWorkers)
 	do := make(chan doSignal, 1)
-	stopProxy := make(chan bool, 1)
 
 	// Dispatch all workers
 	totalTimeout := 1
@@ -393,7 +388,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			totalTimeout += int(g.workers[0].srv.timeout) // once per tier
 		}
 		for _, w := range g.workers {
-			go re.handleRemote(lo, w.srv, g.start, try, do, stopProxy)
+			go re.handleRemote(lo, w.srv, g.start, try, do)
 		}
 	}
 
@@ -406,7 +401,6 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	currentGroup := 0
 	failedInGroup := 0
 	priorityDone := false
-	stopped := false
 	var winSrv *server
 	var winOut net.Conn
 
@@ -444,14 +438,29 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		return false
 	}
 
+	// Helper to abort when no route is available
+	abortNoRoute := func() {
+		if !*fastSwitch {
+			if !exist {
+				if len(re.first) > 0 {
+					logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+				}
+				rt.unlock(lo.key, entry)
+			} else {
+				if len(re.first) > 0 {
+					logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, matchedRoute, lo.key)
+				}
+				rt.del(lo.key, false, matchedRoute, 0)
+			}
+		} else {
+			if len(re.first) > 0 {
+				logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
+			}
+		}
+	}
+
 	for {
 		select {
-		case bad := <-stopProxy:
-			if bad {
-				stopped = true
-				winSrv = nil
-				winOut = nil
-			}
 		case sig := <-try:
 			if sig.srv != nil {
 				// Worker succeeded
@@ -461,13 +470,27 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if isPriority || priorityDone || g.priority == nil {
 					// Use immediately
 					return useWinner(sig.srv, sig.out)
-				} else if !stopped && winSrv == nil {
+				} else if sig.stop2 {
+					// We received a stop2 signal, must be sent by a direct worker (unlikely case)
+					// Stop all other workers and abort
+					do <- doSignal{nil}
+					abortNoRoute()
+					return false
+				} else if winSrv == nil {
 					// Store as pending (only first one, unless stopped)
 					winSrv = sig.srv
 					winOut = sig.out
 				}
 			} else {
 				// Worker failed
+				if sig.stop2 {
+					// We received a stop2 signal, must be sent by a direct worker
+					// Stop all other workers and abort
+					do <- doSignal{nil}
+					abortNoRoute()
+					return false
+				}
+
 				g := groups[currentGroup]
 				if g.priority != nil && sig.srv == g.priority.srv {
 					priorityDone = true
@@ -479,50 +502,18 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if failedInGroup >= len(g.workers) {
 					if !advanceGroup() {
 						// All groups exhausted
-						if !*fastSwitch {
-							if !exist {
-								if len(re.first) > 0 {
-									logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
-								}
-								rt.unlock(lo.key, entry)
-							} else {
-								if len(re.first) > 0 {
-									logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, matchedRoute, lo.key)
-								}
-								rt.del(lo.key, false, matchedRoute, 0)
-							}
-						} else {
-							if len(re.first) > 0 {
-								logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
-							}
-						}
+						abortNoRoute()
 						return false
 					}
 				}
 			}
 		case <-timer1.C:
-			if winSrv != nil && !stopped {
+			if winSrv != nil {
 				return useWinner(winSrv, winOut)
 			}
 		case <-timer2.C:
 			do <- doSignal{nil}
-			if !*fastSwitch {
-				if !exist {
-					if len(re.first) > 0 {
-						logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
-					}
-					rt.unlock(lo.key, entry)
-				} else {
-					if len(re.first) > 0 {
-						logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, matchedRoute, lo.key)
-					}
-					rt.del(lo.key, false, matchedRoute, 0)
-				}
-			} else {
-				if len(re.first) > 0 {
-					logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
-				}
-			}
+			abortNoRoute()
 			return false
 		}
 	}
@@ -569,7 +560,7 @@ func (re *remoteConn) relayLocalFor(lo localConn) {
 	re.conn.Close()
 }
 
-func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, try chan routeResult, do chan doSignal, stopProxy chan bool) {
+func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, try chan routeResult, do chan doSignal) {
 	mu.Lock()
 	jobs[srv.route]++
 	mu.Unlock()
@@ -577,12 +568,9 @@ func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, t
 	select {
 	case <-start:
 		start <- true // put back for next worker
-		out, firstResp, firstIn, bufOut, sentTime, ok, shouldStop := re.fetchResponse(lo, srv)
-		if shouldStop {
-			stopProxy <- true
-		}
+		out, firstResp, firstIn, bufOut, sentTime, ok, stop2 := re.fetchResponse(lo, srv)
 		if ok {
-			try <- routeResult{srv, out}
+			try <- routeResult{srv, out, stop2}
 			mu.Lock()
 			open[srv.route]++
 			mu.Unlock()
@@ -611,7 +599,7 @@ func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, t
 			open[srv.route]--
 			mu.Unlock()
 		} else {
-			try <- routeResult{nil, nil}
+			try <- routeResult{nil, nil, stop2}
 			if out != nil {
 				out.Close()
 			}
@@ -625,7 +613,7 @@ func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, t
 	mu.Unlock()
 }
 
-func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader, sentTime time.Time, ok bool, stop bool) {
+func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader, sentTime time.Time, ok bool, stop2 bool) {
 	network := lo.network
 	if srv.force4 {
 		network = "tcp4"
@@ -726,19 +714,19 @@ func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, fi
 		logger.Printf("%s %5d:  *          %d TCP connection established", lo.mode, lo.total, srv.route)
 	}
 
-	// dest is hostname, match IP rules before sending first byte if DNS is ok
-	if srv.route == 1 && !re.ruleBased && !lo.destIsIP && *dnsOK {
+	// dest is hostname, match IP rules after TCP is established
+	if srv.route == 1 && !re.ruleBased && net.ParseIP(lo.dest) == nil {
 		if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 			var newRoute int
 			newRoute, re.ruleBased = matchIP(lo.total, lo.mode, tcpAddr.IP, lo.dport)
 			switch newRoute {
 			case 0:
 			case 1:
-				stop = true
+				stop2 = true
 			case 2:
 				return
 			default:
-				stop = true
+				stop2 = true
 				return
 			}
 		}
@@ -885,24 +873,6 @@ func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, fi
 		}
 	}
 
-	// Match IP rules after TLS and HTTP check if DNS is not OK and hostname is available
-	if srv.route == 1 && !re.ruleBased && !*dnsOK && lo.host != "" {
-		if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-			var newRoute int
-			newRoute, re.ruleBased = matchIP(lo.total, lo.mode, tcpAddr.IP, lo.dport)
-			switch newRoute {
-			case 0:
-			case 1:
-				stop = true
-			case 2:
-				return
-			default:
-				stop = true
-				return
-			}
-		}
-	}
-
 	firstIn = firstIn[:n]
 	ok = true
 	return
@@ -959,13 +929,13 @@ func (re *remoteConn) relayConnection(lo localConn, out net.Conn, route int, sen
 						}
 						if route == 1 && !re.ruleBased && totalTime.Seconds() < blockSafeTime {
 							if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-								if lo.host == "" || *dnsOK {
-									logger.Printf("H %5d:         ADD %d TCP reset detected, %s %s port %s added to blocked list", lo.total, route, lo.host, tcpAddr.IP, lo.dport)
+								if lo.host == "" {
+									logger.Printf("H %5d:         ADD %d TCP reset detected, %s port %s added to blocked list", lo.total, route, tcpAddr.IP, lo.dport)
 									blockedIPSet.add(tcpAddr.IP, lo.dport)
 								} else {
 									logger.Printf("H %5d:         ADD %d TCP reset detected, %s port %s added to blocked list", lo.total, route, lo.host, lo.dport)
+									blockedHostSet.add(lo.host, lo.dport)
 								}
-								blockedHostSet.add(lo.host, lo.dport)
 							}
 						}
 						if tcp, ok := lo.conn.(*net.TCPConn); ok {
@@ -1042,9 +1012,13 @@ func (re *remoteConn) relayConnection(lo localConn, out net.Conn, route int, sen
 						}
 						if route == 1 && !re.ruleBased {
 							if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-								logger.Printf("H %5d:     ADD     %d TCP reset detected, %s %s port %s added to blocked list", lo.total, route, lo.host, tcpAddr.IP, lo.dport)
-								blockedIPSet.add(tcpAddr.IP, lo.dport)
-								blockedHostSet.add(lo.host, lo.dport)
+								if lo.host == "" {
+									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s port %s added to blocked list", lo.total, route, tcpAddr.IP, lo.dport)
+									blockedIPSet.add(tcpAddr.IP, lo.dport)
+								} else {
+									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s port %s added to blocked list", lo.total, route, lo.host, lo.dport)
+									blockedHostSet.add(lo.host, lo.dport)
+								}
 							}
 						}
 						if tcp, ok := lo.conn.(*net.TCPConn); ok {
@@ -1087,9 +1061,13 @@ func (re *remoteConn) relayConnection(lo localConn, out net.Conn, route int, sen
 						}
 						if route == 1 && !re.ruleBased {
 							if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-								logger.Printf("H %5d:     ADD     %d TCP reset detected, %s %s port %s added to blocked list", lo.total, route, lo.host, tcpAddr.IP, lo.dport)
-								blockedIPSet.add(tcpAddr.IP, lo.dport)
-								blockedHostSet.add(lo.host, lo.dport)
+								if lo.host == "" {
+									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s port %s added to blocked list", lo.total, route, tcpAddr.IP, lo.dport)
+									blockedIPSet.add(tcpAddr.IP, lo.dport)
+								} else {
+									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s port %s added to blocked list", lo.total, route, lo.host, lo.dport)
+									blockedHostSet.add(lo.host, lo.dport)
+								}
 							}
 						}
 						if tcp, ok := lo.conn.(*net.TCPConn); ok {
@@ -1145,13 +1123,13 @@ func (re *remoteConn) relayConnection(lo localConn, out net.Conn, route int, sen
 			}
 			if route == 1 && !re.ruleBased && totalTime.Seconds() < blockSafeTime {
 				if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-					if lo.host == "" || *dnsOK {
-						logger.Printf("%s %5d:         ADD %d TCP reset detected, %s %s port %s added to blocked list", lo.mode, lo.total, route, lo.host, tcpAddr.IP, lo.dport)
+					if lo.host == "" {
+						logger.Printf("%s %5d:         ADD %d TCP reset detected, %s port %s added to blocked list", lo.mode, lo.total, route, tcpAddr.IP, lo.dport)
 						blockedIPSet.add(tcpAddr.IP, lo.dport)
 					} else {
 						logger.Printf("%s %5d:         ADD %d TCP reset detected, %s port %s added to blocked list", lo.mode, lo.total, route, lo.host, lo.dport)
+						blockedHostSet.add(lo.host, lo.dport)
 					}
-					blockedHostSet.add(lo.host, lo.dport)
 				}
 			}
 			if tcp, ok := lo.conn.(*net.TCPConn); ok {
