@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -208,25 +209,28 @@ func main() {
 		go func() {
 			c := time.Tick(time.Minute * time.Duration(*tickInterval))
 			for range c {
-				logger.Printf("STATUS Open connections: Local %d", open[0])
-				for id := range routes {
-					if id != 0 {
-						logger.Printf("STATUS   Route %d: %d", id, open[id])
-					}
+				ids := sortedRouteIDs()
+
+				// Line 1: Open connections
+				connParts := []string{fmt.Sprintf("Local: %d", open[0])}
+				for _, id := range ids {
+					connParts = append(connParts, fmt.Sprintf("R%d: %d", id, open[id]))
 				}
-				for id := range routes {
-					if id != 0 {
-						logger.Printf("STATUS Route %d Sent %.1f MB Recv %.1f MB", id, float64(sent[id])/1000000, float64(received[id])/1000000)
-					}
+				logger.Printf("STATUS Open connections: %s, Routing entries: %d", strings.Join(connParts, ", "), rt.count)
+
+				// Line 2: Traffic
+				trafficParts := make([]string, 0, len(ids))
+				for _, id := range ids {
+					trafficParts = append(trafficParts, fmt.Sprintf("R%d: %.1f/%.1f MB", id, float64(sent[id])/1e6, float64(received[id])/1e6))
 				}
-				if *verbose {
-					logger.Printf("STATUS Routing entries: %d Active dispatchers: %d", rt.count, jobs[0])
-					for id := range routes {
-						if id != 0 {
-							logger.Printf("STATUS   Route %d workers: %d", id, jobs[id])
-						}
-					}
+				logger.Printf("STATUS Sent/Recv %s", strings.Join(trafficParts, ", "))
+
+				// Line 3: Jobs
+				jobParts := make([]string, 0, len(ids))
+				for _, id := range ids {
+					jobParts = append(jobParts, fmt.Sprintf("R%d: %d", id, jobs[id]))
 				}
+				logger.Printf("STATUS Dispatchers %d, Workers %s", jobs[0], strings.Join(jobParts, ", "))
 			}
 		}()
 	}
@@ -388,4 +392,15 @@ func parseProxyURL(urlStr string) *url.URL {
 		log.Fatalf("Unsupported proxy scheme %s", addr.Scheme)
 	}
 	return addr
+}
+
+func sortedRouteIDs() []int {
+	ids := make([]int, 0, len(routes))
+	for id := range routes {
+		if id != 0 {
+			ids = append(ids, id)
+		}
+	}
+	sort.Ints(ids)
+	return ids
 }
