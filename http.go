@@ -84,7 +84,7 @@ func (lo *localConn) handleHTTP() {
 					logger.Printf("H %5d:          *    Local connection reset. Sent %d bytes.", lo.total, totalBytes)
 				}
 				if re.conn != nil {
-					if tcp, ok := (*re.conn).(*net.TCPConn); ok {
+					if tcp, ok := re.conn.(*net.TCPConn); ok {
 						tcp.SetLinger(0)
 					}
 				}
@@ -126,7 +126,7 @@ func (lo *localConn) handleHTTP() {
 
 		if req.Method == "CONNECT" {
 			if re.conn != nil {
-				(*re.conn).Close()
+				re.conn.Close()
 			}
 			resp := &http.Response{
 				Status:     "200 Connection established",
@@ -161,7 +161,7 @@ func (lo *localConn) handleHTTP() {
 			if !newConn && re.conn != nil {
 				re.hasConnection = connection
 				re.reqs <- req
-				if n, err := (*re.conn).Write(header); err == nil {
+				if n, err := re.conn.Write(header); err == nil {
 					re.sent += int64(n)
 				} else {
 					newConn = true
@@ -171,7 +171,7 @@ func (lo *localConn) handleHTTP() {
 			}
 			if newConn {
 				if re.conn != nil {
-					(*re.conn).Close()
+					re.conn.Close()
 				}
 				if re.sent > 0 {
 					mu.Lock()
@@ -200,7 +200,7 @@ func (lo *localConn) handleHTTP() {
 			}
 			if req.ContentLength == -1 && len(req.TransferEncoding) > 0 && req.TransferEncoding[0] == "chunked" {
 				cr := newChunkedReader(lo.buf)
-				n, bytes, err := cr.copy(*re.conn)
+				n, bytes, err := cr.copy(re.conn)
 				re.sent += bytes
 				if errors.Is(err, io.EOF) {
 					if *verbose {
@@ -219,14 +219,14 @@ func (lo *localConn) handleHTTP() {
 					line, err := lo.buf.ReadSlice('\n')
 					trailer = append(trailer, line...)
 					if len(line) == 2 || err != nil {
-						n, _ := (*re.conn).Write(trailer)
+						n, _ := re.conn.Write(trailer)
 						re.sent += int64(n)
 						break
 					}
 				}
 				re.lastReq = time.Now()
 			} else if req.ContentLength != 0 {
-				bytes, err := io.Copy(*re.conn, req.Body)
+				bytes, err := io.Copy(re.conn, req.Body)
 				re.sent += bytes
 				req.Body.Close()
 				if err != nil {
@@ -241,7 +241,7 @@ func (lo *localConn) handleHTTP() {
 		}
 	}
 	if re.conn != nil {
-		(*re.conn).Close()
+		re.conn.Close()
 	}
 }
 

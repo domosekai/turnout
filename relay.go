@@ -428,7 +428,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		}
 		do <- doSignal{srv}
 		re.srv = srv
-		re.conn = &out
+		re.conn = out
 		return true
 	}
 
@@ -536,9 +536,9 @@ func (re *remoteConn) relayLocalFor(lo localConn) {
 		var bytes int
 		bytes, err = lo.buf.Read(p)
 		if err == nil {
-			bytes, err = (*re.conn).Write(p[:bytes])
+			bytes, err = re.conn.Write(p[:bytes])
 		} else {
-			bytes, _ = (*re.conn).Write(p[:bytes])
+			bytes, _ = re.conn.Write(p[:bytes])
 		}
 		totalBytes += int64(bytes)
 		if err != nil {
@@ -555,7 +555,7 @@ func (re *remoteConn) relayLocalFor(lo localConn) {
 		if *verbose {
 			logger.Printf("%s %5d:          *    Local connection reset. Sent %d bytes.", lo.mode, lo.total, totalBytes)
 		}
-		if tcp, ok := (*re.conn).(*net.TCPConn); ok {
+		if tcp, ok := re.conn.(*net.TCPConn); ok {
 			tcp.SetLinger(0)
 		}
 	} else {
@@ -566,7 +566,7 @@ func (re *remoteConn) relayLocalFor(lo localConn) {
 	mu.Lock()
 	sent[re.srv.route] += totalBytes
 	mu.Unlock()
-	(*re.conn).Close()
+	re.conn.Close()
 }
 
 func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, try chan routeResult, do chan doSignal, stopProxy chan bool) {
@@ -946,7 +946,7 @@ func (re *remoteConn) relayConnection(lo localConn, out net.Conn, route int, sen
 						}
 						/*t := time.Since(re.lastReq).Seconds()
 						if route == 1 && !re.ruleBased && t > 30 && totalBytes > 0 && totalBytes < 1000 {
-							if tcpAddr := (*out).RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+							if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 								logger.Printf("H %5d:         ERR %d Connection to %s %s likely cut off, %.1f s since last request", lo.total, route, lo.host, tcpAddr, t)
 								/*logger.Printf("H %5d:         ADD %d Connection likely cut off, %.1f s since last request, %s %s added to blocked list", total, route, t, host, tcpAddr.IP)
 								blockedIPSet.add(tcpAddr.IP)

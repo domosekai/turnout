@@ -53,14 +53,14 @@ type localConn struct {
 	host          string
 	key           string
 	destIsIP      bool
-	conn          net.Conn // never nil
+	conn          net.Conn
 	buf           *bufio.Reader
 	mode, network string
 	total         int
 }
 
 type remoteConn struct {
-	conn          *net.Conn // use pointer to allow nil value
+	conn          net.Conn
 	first         []byte
 	firstIsFull   bool
 	firstReq      *http.Request
