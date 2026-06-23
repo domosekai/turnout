@@ -103,6 +103,7 @@ type routeConfig struct {
 }
 
 type routeResult struct {
+	ok    bool
 	srv   *server
 	out   net.Conn
 	stop2 bool
@@ -362,11 +363,17 @@ func parseConfig(path string) {
 	if _, ok := routes[autoCfg.Secondary]; !ok {
 		log.Fatalf("Auto secondary route %d not found", autoCfg.Secondary)
 	}
+	if autoCfg.Primary == autoCfg.Secondary {
+		log.Fatalf("Auto primary and secondary routes must be different")
+	}
 
 	// Parse blockedRoute
 	blockedRoute = cfg.BlockedRoute
 	if blockedRoute == 0 {
 		blockedRoute = 2
+	}
+	if _, ok := routes[blockedRoute]; !ok {
+		log.Fatalf("Blocked route %d not found", blockedRoute)
 	}
 }
 

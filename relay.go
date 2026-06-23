@@ -248,7 +248,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		if ip := net.ParseIP(lo.dest); ip != nil {
 			// dest is IP, match IP rules if host hasn't matched
 			matchedRoute, re.ruleBased = matchIP(lo.total, lo.mode, ip, lo.dport)
-		} else {
+		} else if lo.host != lo.dest {
 			// dest is hostname
 			matchedRoute, re.ruleBased = matchHost(lo.total, lo.mode, lo.dest, lo.dport)
 		}
@@ -264,7 +264,6 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 
 	// Get existing route or a locked route
 	var entry *routeEntry
-	var exist bool
 	var existSrv *server
 	if !*fastSwitch {
 		if r, s, e, n := rt.addOrLock(lo.key, matchedRoute); e {
@@ -273,7 +272,6 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			if *verbose {
 				logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.key, matchedRoute, s)
 			}
-			exist = true
 			entry = n
 		} else {
 			entry = n
@@ -294,11 +292,11 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			// Parallel: merge direct + secondary tier 0 into one group, direct prioritized
 			g0 := workerGroup{start: make(chan bool, 1)}
 			g0.workers = append(g0.workers, workerInfo{directSrv})
-			g0.priority = &g0.workers[0]
 
 			for _, srv := range secondary.tiers[0] {
 				g0.workers = append(g0.workers, workerInfo{srv})
 			}
+			g0.priority = &g0.workers[0] // must be after appending
 			groups = append(groups, g0)
 			totalWorkers += len(g0.workers)
 
@@ -339,7 +337,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				start:   make(chan bool, 1),
 			})
 			totalWorkers++
-		} else if existSrv != nil && existSrv.route == matchedRoute {
+		} else if existSrv != nil {
 			groups = append(groups, workerGroup{
 				workers: []workerInfo{{existSrv}},
 				start:   make(chan bool, 1),
@@ -367,16 +365,6 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		}
 	}
 
-	if totalWorkers == 0 {
-		if len(re.first) > 0 {
-			logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
-		}
-		if !*fastSwitch {
-			rt.unlock(lo.key, entry)
-		}
-		return false
-	}
-
 	// Create channels
 	try := make(chan routeResult, totalWorkers)
 	do := make(chan doSignal, 1)
@@ -385,7 +373,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	totalTimeout := 1
 	for _, g := range groups {
 		if len(g.workers) > 0 {
-			totalTimeout += int(g.workers[0].srv.timeout) // once per tier
+			totalTimeout += g.workers[0].srv.timeout // once per tier
 		}
 		for _, w := range g.workers {
 			go re.handleRemote(lo, w.srv, g.start, try, do)
@@ -407,7 +395,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	// Helper to use a winning server
 	useWinner := func(srv *server, out net.Conn) bool {
 		if !*fastSwitch {
-			if !exist {
+			if existSrv == nil {
 				if *verbose {
 					logger.Printf("%s %5d:     NEW     %d Save route %d server %d for %s", lo.mode, lo.total, srv.route, srv.route, srv.id, lo.key)
 				}
@@ -441,7 +429,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	// Helper to abort when no route is available
 	abortNoRoute := func() {
 		if !*fastSwitch {
-			if !exist {
+			if existSrv == nil {
 				if len(re.first) > 0 {
 					logger.Printf("%s %5d:     ERR       No available route to %s", lo.mode, lo.total, lo.key)
 				}
@@ -450,7 +438,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if len(re.first) > 0 {
 					logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, matchedRoute, lo.key)
 				}
-				rt.del(lo.key, false, matchedRoute, 0)
+				rt.del(lo.key, false, matchedRoute, existSrv.id)
 			}
 		} else {
 			if len(re.first) > 0 {
@@ -462,7 +450,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	for {
 		select {
 		case sig := <-try:
-			if sig.srv != nil {
+			if sig.ok {
 				// Worker succeeded
 				g := groups[currentGroup]
 				isPriority := g.priority != nil && sig.srv == g.priority.srv
@@ -508,6 +496,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				}
 			}
 		case <-timer1.C:
+			priorityDone = true
 			if winSrv != nil {
 				return useWinner(winSrv, winOut)
 			}
@@ -569,8 +558,9 @@ func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, t
 	case <-start:
 		start <- true // put back for next worker
 		out, firstResp, firstIn, bufOut, sentTime, ok, stop2 := re.fetchResponse(lo, srv)
+		try <- routeResult{ok, srv, out, stop2}
+
 		if ok {
-			try <- routeResult{srv, out, stop2}
 			mu.Lock()
 			open[srv.route]++
 			mu.Unlock()
@@ -599,7 +589,6 @@ func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, t
 			open[srv.route]--
 			mu.Unlock()
 		} else {
-			try <- routeResult{nil, nil, stop2}
 			if out != nil {
 				out.Close()
 			}
