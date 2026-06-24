@@ -234,9 +234,8 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	}
 
 	type workerGroup struct {
-		workers  []workerInfo
-		start    chan bool
-		priority *workerInfo // nil if no priority
+		workers []workerInfo
+		start   chan bool
 	}
 
 	// Match rules
@@ -280,6 +279,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 
 	// Build worker groups (flat slice)
 	var groups []workerGroup
+	var priority *workerInfo
 	totalWorkers := 0
 
 	if matchedRoute == 0 {
@@ -296,7 +296,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			for _, srv := range secondary.tiers[0] {
 				g0.workers = append(g0.workers, workerInfo{srv})
 			}
-			g0.priority = &g0.workers[0] // must be after appending
+			priority = &g0.workers[0] // must be after appending
 			groups = append(groups, g0)
 			totalWorkers += len(g0.workers)
 
@@ -370,11 +370,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	do := make(chan doSignal, 1)
 
 	// Dispatch all workers
-	totalTimeout := 1
 	for _, g := range groups {
-		if len(g.workers) > 0 {
-			totalTimeout += g.workers[0].srv.timeout // once per tier
-		}
 		for _, w := range g.workers {
 			go re.handleRemote(lo, w.srv, g.start, try, do)
 		}
@@ -388,7 +384,8 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	timer2 := time.NewTimer(time.Second * time.Duration(totalTimeout))
 	currentGroup := 0
 	failedInGroup := 0
-	priorityDone := false
+	priorityExpired := false
+	priorityFailed := false
 	var winSrv *server
 	var winOut net.Conn
 
@@ -416,10 +413,9 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 
 	// Helper to move to next group
 	advanceGroup := func() bool {
-		currentGroup++
-		if currentGroup < len(groups) {
+		if currentGroup < len(groups)-1 {
+			currentGroup++
 			failedInGroup = 0
-			priorityDone = false
 			groups[currentGroup].start <- true
 			return true
 		}
@@ -450,12 +446,10 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	for {
 		select {
 		case sig := <-try:
+			isPriority := priority != nil && sig.srv == priority.srv
 			if sig.ok {
 				// Worker succeeded
-				g := groups[currentGroup]
-				isPriority := g.priority != nil && sig.srv == g.priority.srv
-
-				if isPriority || priorityDone || g.priority == nil {
+				if isPriority || priority == nil || priorityExpired || priorityFailed {
 					// Use immediately
 					return useWinner(sig.srv, sig.out)
 				} else if sig.stop2 {
@@ -479,24 +473,34 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 					return false
 				}
 
-				g := groups[currentGroup]
-				if g.priority != nil && sig.srv == g.priority.srv {
-					priorityDone = true
+				if isPriority {
+					priorityFailed = true
 					if winSrv != nil {
 						return useWinner(winSrv, winOut)
 					}
+
+					// Do not count failure if not the first group
+					if currentGroup == 0 {
+						failedInGroup++
+					}
+				} else {
+					failedInGroup++
 				}
-				failedInGroup++
-				if failedInGroup >= len(g.workers) {
-					if !advanceGroup() {
-						// All groups exhausted
+
+				g := groups[currentGroup]
+
+				// Advance to next group even if priority is still pending
+				if failedInGroup >= len(g.workers) || currentGroup == 0 && priority != nil && !priorityFailed && failedInGroup >= len(g.workers)-1 {
+					if !advanceGroup() && (priority == nil || priorityFailed) {
+						// All groups exhausted (including priority if any), abort
+						//do <- doSignal{nil} // No need to send signal, all workers are done
 						abortNoRoute()
 						return false
 					}
 				}
 			}
 		case <-timer1.C:
-			priorityDone = true
+			priorityExpired = true
 			if winSrv != nil {
 				return useWinner(winSrv, winOut)
 			}

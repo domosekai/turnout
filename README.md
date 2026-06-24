@@ -218,6 +218,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   Tier 0 servers are tried first. If all servers in a tier fail, the next tier is tried. Routes support an arbitrary number of tiers.
   
   Optional top-level fields:
+  - `timeout`: Global timeout in seconds for the entire route-selection process (default: 20). If no route responds within this time, all workers are stopped and the connection is aborted.
   - `auto`: Automatic routing strategy with `primary`, `secondary`, and `priority` (seconds to prioritize primary)
   - `blockedRoute`: Route ID to use for blocked/slow destinations (default: 2)
   
@@ -248,6 +249,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
         ]
       }
     ],
+    "timeout": 20,
     "auto": {
       "primary": 1,
       "secondary": 2,

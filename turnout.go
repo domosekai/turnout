@@ -125,6 +125,7 @@ var (
 	servers      []*server // indexed by server id (1-based for proxies, 0 unused)
 	autoCfg      autoConfig
 	blockedRoute int
+	totalTimeout int
 	chkPorts     []string
 	rt           routingTable
 	shdns        *net.UDPAddr
@@ -134,6 +135,7 @@ type config struct {
 	Routes       []routeSpec `json:"routes"`
 	Auto         autoConfig  `json:"auto"`
 	BlockedRoute int         `json:"blockedRoute"`
+	Timeout      int         `json:"timeout"`
 }
 
 func main() {
@@ -374,6 +376,14 @@ func parseConfig(path string) {
 	}
 	if _, ok := routes[blockedRoute]; !ok {
 		log.Fatalf("Blocked route %d not found", blockedRoute)
+	}
+
+	totalTimeout = cfg.Timeout
+	if totalTimeout == 0 {
+		totalTimeout = 20
+	}
+	if totalTimeout < 0 {
+		log.Fatalf("Invalid total timeout %d", totalTimeout)
 	}
 }
 
