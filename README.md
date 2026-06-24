@@ -222,7 +222,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   Optional top-level fields:
   - `timeout`: Global timeout in seconds for the entire route-selection process (default: 20). If no route responds within this time, all workers are stopped and the connection is aborted.
   - `auto`: Automatic routing strategy with `primary`, `secondary`, and `priority` (seconds to prioritize primary)
-  - `blockedRoute`: Route ID(s) to use for blocked/slow destinations (default: 2). Can be comma-separated for fallback (e.g., "2,3").
+  - `blockedRoute`: Route ID(s) to use for blocked/slow destinations (default: "2,1"). Can be comma-separated for fallback (e.g., "2,3").
   
   ```json
   {

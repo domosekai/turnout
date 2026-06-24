@@ -371,7 +371,7 @@ func parseConfig(path string) {
 
 	// Parse blockedRoute
 	if cfg.BlockedRoute == "" {
-		blockedRoutes = []int{2}
+		blockedRoutes = []int{2, 1}
 	} else {
 		var err error
 		blockedRoutes, err = parseRoutes(cfg.BlockedRoute)
@@ -387,6 +387,7 @@ func parseConfig(path string) {
 			log.Fatalf("Blocked route %d not found", r)
 		}
 	}
+	logger.Printf("Blocked routes: %v", blockedRoutes)
 
 	totalTimeout = cfg.Timeout
 	if totalTimeout == 0 {
