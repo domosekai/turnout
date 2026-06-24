@@ -239,37 +239,39 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	}
 
 	// Match rules
-	var matchedRoute int
+	var matchedRoutes []int
 	if lo.host != "" {
-		matchedRoute, re.ruleBased = matchHost(lo.total, lo.mode, lo.host, lo.dport)
+		matchedRoutes, re.ruleBased = matchHost(lo.total, lo.mode, lo.host, lo.dport)
 	}
-	if matchedRoute == 0 {
+	if len(matchedRoutes) == 0 {
 		if ip := net.ParseIP(lo.dest); ip != nil {
 			// dest is IP, match IP rules if host hasn't matched
-			matchedRoute, re.ruleBased = matchIP(lo.total, lo.mode, ip, lo.dport)
+			matchedRoutes, re.ruleBased = matchIP(lo.total, lo.mode, ip, lo.dport)
 		} else if lo.host != lo.dest {
 			// dest is hostname
-			matchedRoute, re.ruleBased = matchHost(lo.total, lo.mode, lo.dest, lo.dport)
+			matchedRoutes, re.ruleBased = matchHost(lo.total, lo.mode, lo.dest, lo.dport)
 		}
 	}
 
-	// Validate route exists
-	if matchedRoute < 0 || (matchedRoute != 0 && routes[matchedRoute] == nil) {
-		if *verbose {
-			logger.Printf("%s %5d:  *            Route to %s is invalid or blocked", lo.mode, lo.total, lo.key)
+	// Validate all routes exist
+	for _, r := range matchedRoutes {
+		if r < 0 || (r != 0 && routes[r] == nil) {
+			if *verbose {
+				logger.Printf("%s %5d:  *            Route to %s is invalid or blocked", lo.mode, lo.total, lo.key)
+			}
+			return false
 		}
-		return false
 	}
 
 	// Get existing route or a locked route
 	var entry *routeEntry
 	var existSrv *server
 	if !*fastSwitch {
-		if r, s, e, n := rt.addOrLock(lo.key, matchedRoute); e {
-			matchedRoute = r
+		if r, s, e, n := rt.addOrLock(lo.key, matchedRoutes); e {
+			matchedRoutes = []int{r}
 			existSrv = servers[s]
 			if *verbose {
-				logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.key, matchedRoute, s)
+				logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", lo.mode, lo.total, lo.key, r, s)
 			}
 			entry = n
 		} else {
@@ -282,7 +284,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	var priority *workerInfo
 	totalWorkers := 0
 
-	if matchedRoute == 0 {
+	if len(matchedRoutes) == 0 {
 		// Race mode
 		primary := routes[autoCfg.Primary]
 		secondary := routes[autoCfg.Secondary]
@@ -328,39 +330,45 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 			}
 		}
 	} else {
-		// Specific matched route
-		rc := routes[matchedRoute]
-		if rc.direct {
-			srv := rc.tiers[0][0]
-			groups = append(groups, workerGroup{
-				workers: []workerInfo{{srv}},
-				start:   make(chan bool, 1),
-			})
-			totalWorkers++
-		} else if existSrv != nil {
+		// Specific matched routes
+		if existSrv != nil {
+			// Use existing server (addOrLock already validated it)
 			groups = append(groups, workerGroup{
 				workers: []workerInfo{{existSrv}},
 				start:   make(chan bool, 1),
 			})
 			totalWorkers++
-		} else if re.successive {
-			for _, tier := range rc.tiers {
-				for _, srv := range tier {
+		} else {
+			// Build groups for all routes in fallback order
+			for _, routeID := range matchedRoutes {
+				rc := routes[routeID]
+				if rc.direct {
+					srv := rc.tiers[0][0]
 					groups = append(groups, workerGroup{
 						workers: []workerInfo{{srv}},
 						start:   make(chan bool, 1),
 					})
 					totalWorkers++
+				} else if re.successive {
+					for _, tier := range rc.tiers {
+						for _, srv := range tier {
+							groups = append(groups, workerGroup{
+								workers: []workerInfo{{srv}},
+								start:   make(chan bool, 1),
+							})
+							totalWorkers++
+						}
+					}
+				} else {
+					for _, tier := range rc.tiers {
+						g := workerGroup{start: make(chan bool, 1)}
+						for _, srv := range tier {
+							g.workers = append(g.workers, workerInfo{srv})
+						}
+						groups = append(groups, g)
+						totalWorkers += len(g.workers)
+					}
 				}
-			}
-		} else {
-			for _, tier := range rc.tiers {
-				g := workerGroup{start: make(chan bool, 1)}
-				for _, srv := range tier {
-					g.workers = append(g.workers, workerInfo{srv})
-				}
-				groups = append(groups, g)
-				totalWorkers += len(g.workers)
 			}
 		}
 	}
@@ -432,9 +440,9 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				rt.unlock(lo.key, entry)
 			} else {
 				if len(re.first) > 0 {
-					logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, matchedRoute, lo.key)
+					logger.Printf("%s %5d:     ERR     %d Existing route to %s failed", lo.mode, lo.total, existSrv.route, lo.key)
 				}
-				rt.del(lo.key, false, matchedRoute, existSrv.id)
+				rt.del(lo.key, false, existSrv.route, existSrv.id)
 			}
 		} else {
 			if len(re.first) > 0 {
@@ -710,17 +718,15 @@ func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, fi
 	// dest is hostname, match IP rules after TCP is established
 	if srv.route == 1 && !re.ruleBased && net.ParseIP(lo.dest) == nil {
 		if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-			var newRoute int
-			newRoute, re.ruleBased = matchIP(lo.total, lo.mode, tcpAddr.IP, lo.dport)
-			switch newRoute {
-			case 0:
-			case 1:
-				stop2 = true
-			case 2:
-				return
-			default:
-				stop2 = true
-				return
+			newRoutes, ruleBased := matchIP(lo.total, lo.mode, tcpAddr.IP, lo.dport)
+			re.ruleBased = ruleBased
+			if len(newRoutes) > 0 {
+				if !containsRoute(newRoutes, 2) {
+					stop2 = true
+				}
+				if !containsRoute(newRoutes, 1) {
+					return
+				}
 			}
 		}
 	}
@@ -814,7 +820,7 @@ func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, fi
 			if *verbose {
 				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms.", lo.total, srv.route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
 			}
-			if srv.route == 1 && !re.ruleBased && httpRules.findRouteForText(firstResp.Status, false) == 2 {
+			if srv.route == 1 && !re.ruleBased && containsRoute(httpRules.findRouteForText(firstResp.Status, false), blockedRoute) {
 				if *verbose {
 					logger.Printf("%s %5d:      *      %d HTTP status in blocklist", lo.mode, lo.total, srv.route)
 				}
@@ -826,7 +832,7 @@ func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, fi
 					if *verbose {
 						logger.Printf("%s %5d:      *      %d HTTP Status %s", lo.mode, lo.total, srv.route, resp.Status)
 					}
-					if srv.route == 1 && !re.ruleBased && httpRules.findRouteForText(resp.Status, false) == 2 {
+					if srv.route == 1 && !re.ruleBased && containsRoute(httpRules.findRouteForText(resp.Status, false), blockedRoute) {
 						if *verbose {
 							logger.Printf("%s %5d:      *      %d HTTP status in blocklist", lo.mode, lo.total, srv.route)
 						}
@@ -1140,56 +1146,52 @@ func (re *remoteConn) relayConnection(lo localConn, out net.Conn, route int, sen
 	}
 }
 
-func matchHost(total int, mode, host, port string) (route int, ruleBased bool) {
-	if hostRules.rules != nil {
-		route = hostRules.findRouteForText(host, true)
-		if route != 0 {
-			if *verbose {
-				logger.Printf("%s %5d: RUL           Host rule matched for %s. Select route %d", mode, total, host, route)
-			}
-			ruleBased = true
-			return
+func matchHost(total int, mode, host, port string) (routes []int, ruleBased bool) {
+	routes = hostRules.findRouteForText(host, true)
+	if len(routes) > 0 {
+		if *verbose {
+			logger.Printf("%s %5d: RUL           Host rule matched for %s. Select routes %v", mode, total, host, routes)
 		}
+		ruleBased = true
+		return
 	}
 	if blockedHostSet.find(host, port, false) {
-		route = blockedRoute
+		routes = []int{blockedRoute}
 		if *verbose {
-			logger.Printf("%s %5d: SET           Host %s port %s found in blocked list. Select route %d", mode, total, host, port, route)
+			logger.Printf("%s %5d: SET           Host %s port %s found in blocked list. Select route %d", mode, total, host, port, blockedRoute)
 		}
 		return
 	}
 	if slowHostSet.find(host, port, false) {
-		route = blockedRoute
+		routes = []int{blockedRoute}
 		if *verbose {
-			logger.Printf("%s %5d: SET           Host %s port %s found in slow list. Select route %d", mode, total, host, port, route)
+			logger.Printf("%s %5d: SET           Host %s port %s found in slow list. Select route %d", mode, total, host, port, blockedRoute)
 		}
 		return
 	}
 	return
 }
 
-func matchIP(total int, mode string, ip net.IP, port string) (route int, ruleBased bool) {
-	if ipRules.rules != nil {
-		route = ipRules.findRouteForIP(ip)
-		if route != 0 {
-			if *verbose {
-				logger.Printf("%s %5d: RUL           IP rule matched for %s. Select route %d", mode, total, ip, route)
-			}
-			ruleBased = true
-			return
+func matchIP(total int, mode string, ip net.IP, port string) (routes []int, ruleBased bool) {
+	routes = ipRules.findRouteForIP(ip)
+	if len(routes) > 0 {
+		if *verbose {
+			logger.Printf("%s %5d: RUL           IP rule matched for %s. Select routes %v", mode, total, ip, routes)
 		}
+		ruleBased = true
+		return
 	}
 	if blockedIPSet.find(ip, port, false) {
-		route = blockedRoute
+		routes = []int{blockedRoute}
 		if *verbose {
-			logger.Printf("%s %5d: SET           IP %s port %s found in blocked list. Select route %d", mode, total, ip, port, route)
+			logger.Printf("%s %5d: SET           IP %s port %s found in blocked list. Select route %d", mode, total, ip, port, blockedRoute)
 		}
 		return
 	}
 	if slowIPSet.find(ip, port, false) {
-		route = blockedRoute
+		routes = []int{blockedRoute}
 		if *verbose {
-			logger.Printf("%s %5d: SET           IP %s port %s found in slow list. Select route %d", mode, total, ip, port, route)
+			logger.Printf("%s %5d: SET           IP %s port %s found in slow list. Select route %d", mode, total, ip, port, blockedRoute)
 		}
 		return
 	}

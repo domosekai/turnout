@@ -11,8 +11,9 @@
 // Destinations with specific routes are exempt from speed check.
 
 // Format (Remove the leading // to take effect)
-//1 192.168.0.0/16   Select route 1
-//2 8.8.8.8          Select route 2
-//-1 127.0.0.0/8     Destinations with route -1 will be blocked
-//2 ELSE             Special rule matching any unmatched destinations
-//0 17.0.0.0/8       Select route automatically (used with ELSE rule)
+//1 192.168.0.0/16     Select route 1
+//1,2 192.168.0.0/16   CIDR with fallback (try route 1, then route 2)
+//2 8.8.8.8            Select route 2
+//-1 127.0.0.0/8       Destinations with route -1 will be blocked
+//1,2 ELSE             Special rule matching any unmatched destinations with fallback
+//0 17.0.0.0/8         Select route automatically (used with ELSE rule)
