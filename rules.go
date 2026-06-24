@@ -111,6 +111,9 @@ func (list *ipRuleList) parseIPList(file string) {
 			}
 		}
 	}
+	if list.rules != nil {
+		sort.Sort(byByte(list.rules))
+	}
 }
 
 func (list *hostRuleList) parseHostList(file string) {
@@ -251,6 +254,9 @@ func cmpIPIPNet6(ip net.IP, ipnet net.IPNet) int { // based on net.Contains()
 func (list *ipRuleList) findRouteForIP(ip net.IP) int { // based on sort.Search()
 	list.rw.RLock()
 	defer list.rw.RUnlock()
+	if list.rules == nil {
+		return 0
+	}
 	for i, j := 0, len(list.rules); i < j; {
 		switch k := int(uint(i+j) >> 1); cmpIPIPNet6(ip.To16(), list.rules[k].ipnet6) { // i <= k < j
 		case -1:
@@ -270,6 +276,9 @@ func (list *ipRuleList) findRouteForIP(ip net.IP) int { // based on sort.Search(
 func (list *hostRuleList) findRouteForText(text string, ignoreCase bool) int {
 	list.rw.RLock()
 	defer list.rw.RUnlock()
+	if list.rules == nil {
+		return 0
+	}
 	if ignoreCase {
 		text = strings.ToLower(text)
 	}
@@ -319,7 +328,6 @@ func readIPRules(list *ipRuleList, file string) {
 	list.rw.RLock()
 	if list.rules != nil {
 		logger.Printf("Loaded %d IP rules", len(list.rules))
-		sort.Sort(byByte(list.rules))
 	}
 	if list.elseRoute != 0 {
 		logger.Printf("Unmatched IPs will use route %d", list.elseRoute)

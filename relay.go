@@ -1256,15 +1256,13 @@ func (re *remoteConn) doRemote(lo localConn, out *net.Conn, network string, time
 }
 
 func matchHost(total int, mode, host, port string) (route int, ruleBased bool) {
-	if hostRules.rules != nil {
-		route = hostRules.findRouteForText(host, true)
-		if route != 0 {
-			if *verbose {
-				logger.Printf("%s %5d: RUL           Host rule matched for %s. Select route %d", mode, total, host, route)
-			}
-			ruleBased = true
-			return
+	route = hostRules.findRouteForText(host, true)
+	if route != 0 {
+		if *verbose {
+			logger.Printf("%s %5d: RUL           Host rule matched for %s. Select route %d", mode, total, host, route)
 		}
+		ruleBased = true
+		return
 	}
 	if blockedHostSet.find(host, port, false) {
 		route = 2
@@ -1284,15 +1282,13 @@ func matchHost(total int, mode, host, port string) (route int, ruleBased bool) {
 }
 
 func matchIP(total int, mode string, ip net.IP, port string) (route int, ruleBased bool) {
-	if ipRules.rules != nil {
-		route = ipRules.findRouteForIP(ip)
-		if route != 0 {
-			if *verbose {
-				logger.Printf("%s %5d: RUL           IP rule matched for %s. Select route %d", mode, total, ip, route)
-			}
-			ruleBased = true
-			return
+	route = ipRules.findRouteForIP(ip)
+	if route != 0 {
+		if *verbose {
+			logger.Printf("%s %5d: RUL           IP rule matched for %s. Select route %d", mode, total, ip, route)
 		}
+		ruleBased = true
+		return
 	}
 	if blockedIPSet.find(ip, port, false) {
 		route = 2
