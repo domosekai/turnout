@@ -114,21 +114,21 @@ type doSignal struct {
 }
 
 var (
-	logger       Logger
-	wg           sync.WaitGroup
-	mu           sync.Mutex
-	open         = make(map[int]int)
-	jobs         = make(map[int]int)
-	sent         = make(map[int]int64)
-	received     = make(map[int]int64)
-	routes       = make(map[int]*routeConfig)
+	logger        Logger
+	wg            sync.WaitGroup
+	mu            sync.Mutex
+	open          = make(map[int]int)
+	jobs          = make(map[int]int)
+	sent          = make(map[int]int64)
+	received      = make(map[int]int64)
+	routes        = make(map[int]*routeConfig)
 	servers       []*server // indexed by server id (1-based for proxies, 0 unused)
 	autoCfg       autoConfig
 	blockedRoutes []int
 	totalTimeout  int
-	chkPorts     []string
-	rt           routingTable
-	shdns        *net.UDPAddr
+	chkPorts      []string
+	rt            routingTable
+	shdns         *net.UDPAddr
 )
 
 type config struct {
