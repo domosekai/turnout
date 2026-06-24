@@ -212,7 +212,7 @@ func (list *hostRuleList) parseHTTPRules(str string) {
 			continue
 		}
 		if s == "*" {
-			list.rules = append(list.rules, hostRule{any: true, routes: []int{blockedRoute}})
+			list.rules = append(list.rules, hostRule{any: true, routes: blockedRoutes})
 			continue
 		}
 		if strings.Contains(s, "**") {
@@ -224,24 +224,24 @@ func (list *hostRuleList) parseHTTPRules(str string) {
 		switch len(parts) {
 		case 1:
 			if b1 && b2 {
-				list.rules = append(list.rules, hostRule{middle: strings.ToLower(parts[0]), routes: []int{blockedRoute}})
+				list.rules = append(list.rules, hostRule{middle: strings.ToLower(parts[0]), routes: blockedRoutes})
 			} else if b1 && !b2 {
-				list.rules = append(list.rules, hostRule{right: strings.ToLower(parts[0]), routes: []int{blockedRoute}})
+				list.rules = append(list.rules, hostRule{right: strings.ToLower(parts[0]), routes: blockedRoutes})
 			} else {
 				// Assume no asterisk as left match
-				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), routes: []int{blockedRoute}})
+				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), routes: blockedRoutes})
 			}
 		case 2:
 			if b1 && !b2 {
-				list.rules = append(list.rules, hostRule{middle: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), routes: []int{blockedRoute}})
+				list.rules = append(list.rules, hostRule{middle: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), routes: blockedRoutes})
 			} else if !b1 && b2 {
-				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), routes: []int{blockedRoute}})
+				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), routes: blockedRoutes})
 			} else if !b1 && !b2 {
-				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), routes: []int{blockedRoute}})
+				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), right: strings.ToLower(parts[1]), routes: blockedRoutes})
 			}
 		case 3:
 			if !b1 && !b2 {
-				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), right: strings.ToLower(parts[2]), routes: []int{blockedRoute}})
+				list.rules = append(list.rules, hostRule{left: strings.ToLower(parts[0]), middle: strings.ToLower(parts[1]), right: strings.ToLower(parts[2]), routes: blockedRoutes})
 			}
 		default:
 			log.Fatalf("Invalid HTTP rule: %s", s)

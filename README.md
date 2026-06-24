@@ -192,6 +192,8 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
 
   Turnout is supposed to be doing routing automatically without the help of any list. But it still supports these lists for the use by advanced users. Please refer to the sample lists to learn about the format.
 
+  Routes in rules can be comma-separated for fallback. For example, `1,2` means try route 1 first, and if it fails, try route 2. Only positive routes are allowed in multi-route specifications.
+
 - Proxy schemes
 
   Turnout was originally designed to work only with SOCKS5 proxies. Support for HTTP/HTTPS proxies has recently been added.
@@ -220,7 +222,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   Optional top-level fields:
   - `timeout`: Global timeout in seconds for the entire route-selection process (default: 20). If no route responds within this time, all workers are stopped and the connection is aborted.
   - `auto`: Automatic routing strategy with `primary`, `secondary`, and `priority` (seconds to prioritize primary)
-  - `blockedRoute`: Route ID to use for blocked/slow destinations (default: 2)
+  - `blockedRoute`: Route ID(s) to use for blocked/slow destinations (default: 2). Can be comma-separated for fallback (e.g., "2,3").
   
   ```json
   {
@@ -255,7 +257,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
       "secondary": 2,
       "priority": 1
     },
-    "blockedRoute": 2
+    "blockedRoute": "2,3"
   }
   ```
 

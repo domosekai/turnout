@@ -820,7 +820,7 @@ func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, fi
 			if *verbose {
 				logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d. TTFB %d ms.", lo.total, srv.route, firstResp.Status, firstResp.ContentLength, ttfb.Milliseconds())
 			}
-			if srv.route == 1 && !re.ruleBased && containsRoute(httpRules.findRouteForText(firstResp.Status, false), blockedRoute) {
+			if srv.route == 1 && !re.ruleBased && len(httpRules.findRouteForText(firstResp.Status, false)) > 0 {
 				if *verbose {
 					logger.Printf("%s %5d:      *      %d HTTP status in blocklist", lo.mode, lo.total, srv.route)
 				}
@@ -832,7 +832,7 @@ func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, fi
 					if *verbose {
 						logger.Printf("%s %5d:      *      %d HTTP Status %s", lo.mode, lo.total, srv.route, resp.Status)
 					}
-					if srv.route == 1 && !re.ruleBased && containsRoute(httpRules.findRouteForText(resp.Status, false), blockedRoute) {
+					if srv.route == 1 && !re.ruleBased && len(httpRules.findRouteForText(resp.Status, false)) > 0 {
 						if *verbose {
 							logger.Printf("%s %5d:      *      %d HTTP status in blocklist", lo.mode, lo.total, srv.route)
 						}
@@ -1156,16 +1156,16 @@ func matchHost(total int, mode, host, port string) (routes []int, ruleBased bool
 		return
 	}
 	if blockedHostSet.find(host, port, false) {
-		routes = []int{blockedRoute}
+		routes = blockedRoutes
 		if *verbose {
-			logger.Printf("%s %5d: SET           Host %s port %s found in blocked list. Select route %d", mode, total, host, port, blockedRoute)
+			logger.Printf("%s %5d: SET           Host %s port %s found in blocked list. Select routes %v", mode, total, host, port, blockedRoutes)
 		}
 		return
 	}
 	if slowHostSet.find(host, port, false) {
-		routes = []int{blockedRoute}
+		routes = blockedRoutes
 		if *verbose {
-			logger.Printf("%s %5d: SET           Host %s port %s found in slow list. Select route %d", mode, total, host, port, blockedRoute)
+			logger.Printf("%s %5d: SET           Host %s port %s found in slow list. Select routes %v", mode, total, host, port, blockedRoutes)
 		}
 		return
 	}
@@ -1182,16 +1182,16 @@ func matchIP(total int, mode string, ip net.IP, port string) (routes []int, rule
 		return
 	}
 	if blockedIPSet.find(ip, port, false) {
-		routes = []int{blockedRoute}
+		routes = blockedRoutes
 		if *verbose {
-			logger.Printf("%s %5d: SET           IP %s port %s found in blocked list. Select route %d", mode, total, ip, port, blockedRoute)
+			logger.Printf("%s %5d: SET           IP %s port %s found in blocked list. Select routes %v", mode, total, ip, port, blockedRoutes)
 		}
 		return
 	}
 	if slowIPSet.find(ip, port, false) {
-		routes = []int{blockedRoute}
+		routes = blockedRoutes
 		if *verbose {
-			logger.Printf("%s %5d: SET           IP %s port %s found in slow list. Select route %d", mode, total, ip, port, blockedRoute)
+			logger.Printf("%s %5d: SET           IP %s port %s found in slow list. Select routes %v", mode, total, ip, port, blockedRoutes)
 		}
 		return
 	}

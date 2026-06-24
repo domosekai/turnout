@@ -122,10 +122,10 @@ var (
 	sent         = make(map[int]int64)
 	received     = make(map[int]int64)
 	routes       = make(map[int]*routeConfig)
-	servers      []*server // indexed by server id (1-based for proxies, 0 unused)
-	autoCfg      autoConfig
-	blockedRoute int
-	totalTimeout int
+	servers       []*server // indexed by server id (1-based for proxies, 0 unused)
+	autoCfg       autoConfig
+	blockedRoutes []int
+	totalTimeout  int
 	chkPorts     []string
 	rt           routingTable
 	shdns        *net.UDPAddr
@@ -134,7 +134,7 @@ var (
 type config struct {
 	Routes       []routeSpec `json:"routes"`
 	Auto         autoConfig  `json:"auto"`
-	BlockedRoute int         `json:"blockedRoute"`
+	BlockedRoute string      `json:"blockedRoute"`
 	Timeout      int         `json:"timeout"`
 }
 
@@ -370,12 +370,22 @@ func parseConfig(path string) {
 	}
 
 	// Parse blockedRoute
-	blockedRoute = cfg.BlockedRoute
-	if blockedRoute == 0 {
-		blockedRoute = 2
+	if cfg.BlockedRoute == "" {
+		blockedRoutes = []int{2}
+	} else {
+		var err error
+		blockedRoutes, err = parseRoutes(cfg.BlockedRoute)
+		if err != nil {
+			log.Fatalf("Invalid blockedRoute: %v", err)
+		}
 	}
-	if _, ok := routes[blockedRoute]; !ok {
-		log.Fatalf("Blocked route %d not found", blockedRoute)
+	for _, r := range blockedRoutes {
+		if r <= 0 {
+			log.Fatalf("Blocked route must be positive: %d", r)
+		}
+		if _, ok := routes[r]; !ok {
+			log.Fatalf("Blocked route %d not found", r)
+		}
 	}
 
 	totalTimeout = cfg.Timeout
