@@ -128,6 +128,7 @@ var (
 	totalTimeout  int
 	chkPorts      []string
 	rt            routingTable
+	dnsTimeout    int
 	shdns         *net.UDPAddr
 )
 
@@ -136,6 +137,7 @@ type config struct {
 	Auto         autoConfig  `json:"auto"`
 	BlockedRoute string      `json:"blockedRoute"`
 	Timeout      int         `json:"timeout"`
+	DNSTimeout   int         `json:"dnsTimeout"`
 }
 
 func main() {
@@ -395,6 +397,13 @@ func parseConfig(path string) {
 	}
 	if totalTimeout < 0 {
 		log.Fatalf("Invalid total timeout %d", totalTimeout)
+	}
+	dnsTimeout = cfg.DNSTimeout
+	if dnsTimeout == 0 {
+		dnsTimeout = 3
+	}
+	if dnsTimeout < 0 {
+		log.Fatalf("Invalid DNS timeout %d", dnsTimeout)
 	}
 }
 

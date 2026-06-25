@@ -256,7 +256,7 @@ func (re *remoteConn) getRouteFor(lo *localConn) bool {
 
 			// resolve hostname to IP if no host rules matched
 			if len(matchedRoutes) == 0 {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(dnsTimeout))
 				network := "ip"
 				if servers[0].force4 {
 					network = "ip4"
