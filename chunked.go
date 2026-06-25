@@ -83,7 +83,7 @@ func (cr *chunkedReader) copy(w net.Conn) (number int, n int64, err error) {
 	return number, n, cr.err
 }
 
-func (cr *chunkedReader) copyTo(lo localConn, re remoteConn, addr net.Addr, route int, lastBytes int64) (number int, n int64, err error) {
+func (cr *chunkedReader) copyTo(lo *localConn, re *remoteConn, addr net.Addr, route int, lastBytes int64) (number int, n int64, err error) {
 	for cr.err == nil {
 		h := cr.beginChunk()
 		if cr.n > 0 {

@@ -199,8 +199,8 @@ func (lo *localConn) getFirstByte() {
 	}
 
 	re.first = first[:n]
-	if re.getRouteFor(*lo) {
-		re.relayLocalFor(*lo)
+	if re.getRouteFor(lo) {
+		re.relayLocalFor(lo)
 	}
 
 }
@@ -220,7 +220,7 @@ func normalizeHostname(host, defaultPort string) (string, string) {
 	return h, defaultPort
 }
 
-func (re *remoteConn) getRouteFor(lo localConn) bool {
+func (re *remoteConn) getRouteFor(lo *localConn) bool {
 	mu.Lock()
 	jobs[0]++
 	mu.Unlock()
@@ -531,7 +531,7 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 	}
 }
 
-func (re *remoteConn) relayLocalFor(lo localConn) {
+func (re *remoteConn) relayLocalFor(lo *localConn) {
 	totalBytes := int64(len(re.first))
 	var err error
 	for {
@@ -572,7 +572,7 @@ func (re *remoteConn) relayLocalFor(lo localConn) {
 	re.conn.Close()
 }
 
-func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, try chan routeResult, do chan doSignal) {
+func (re *remoteConn) handleRemote(lo *localConn, srv *server, start chan bool, try chan routeResult, do chan doSignal) {
 	mu.Lock()
 	jobs[srv.route]++
 	mu.Unlock()
@@ -625,7 +625,7 @@ func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, t
 	mu.Unlock()
 }
 
-func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader, sentTime time.Time, ok bool) {
+func (re *remoteConn) fetchResponse(lo *localConn, srv *server) (out net.Conn, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader, sentTime time.Time, ok bool) {
 	network := lo.network
 	if srv.force4 {
 		network = "tcp4"
@@ -877,7 +877,7 @@ func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, fi
 	return
 }
 
-func (re *remoteConn) relayConnection(lo localConn, out net.Conn, route int, sentTime time.Time, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader) {
+func (re *remoteConn) relayConnection(lo *localConn, out net.Conn, route int, sentTime time.Time, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader) {
 	// Drain channel so that sender will not block
 	defer func() {
 		for len(re.reqs) > 0 {
@@ -996,7 +996,7 @@ func (re *remoteConn) relayConnection(lo localConn, out net.Conn, route int, sen
 			}
 			if resp.ContentLength == -1 && len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked" {
 				cr := newChunkedReader(bufOut)
-				n, bytes, err := cr.copyTo(lo, *re, out.RemoteAddr(), route, accum)
+				n, bytes, err := cr.copyTo(lo, re, out.RemoteAddr(), route, accum)
 				accum += bytes
 				totalBytes += bytes
 				if err == nil || errors.Is(err, io.EOF) {
@@ -1198,7 +1198,7 @@ func matchIP(total int, mode string, ip net.IP, port string) (routes []int, rule
 	return
 }
 
-func (re *remoteConn) writeTo(lo localConn, out io.Reader, single bool, addr net.Addr, route int, lastBytes int64) (bytes int64, err error) {
+func (re *remoteConn) writeTo(lo *localConn, out io.Reader, single bool, addr net.Addr, route int, lastBytes int64) (bytes int64, err error) {
 	if route == 1 && *slowSpeed > 0 && !re.ruleBased && contain(chkPorts, lo.dport) {
 		var sample int64
 		sampleStart := time.Now()
