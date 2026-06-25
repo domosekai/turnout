@@ -8,6 +8,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -247,9 +248,33 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 		if ip := net.ParseIP(lo.dest); ip != nil {
 			// dest is IP, match IP rules if host hasn't matched
 			matchedRoutes, re.ruleBased = matchIP(lo.total, lo.mode, ip, lo.dport)
-		} else if lo.host != lo.dest {
+		} else {
 			// dest is hostname
-			matchedRoutes, re.ruleBased = matchHost(lo.total, lo.mode, lo.dest, lo.dport)
+			if lo.host != lo.dest {
+				matchedRoutes, re.ruleBased = matchHost(lo.total, lo.mode, lo.dest, lo.dport)
+			}
+
+			// resolve hostname to IP if no host rules matched
+			if len(matchedRoutes) == 0 {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+				network := "ip"
+				if servers[0].force4 {
+					network = "ip4"
+				}
+
+				ips, err := net.DefaultResolver.LookupIP(ctx, network, lo.dest)
+				cancel()
+
+				if err != nil || len(ips) == 0 {
+					if *verbose {
+						logger.Printf("%s %5d: ERR           DNS resolution failed for %s", lo.mode, lo.total, lo.dest)
+					}
+					return false
+				}
+
+				matchedRoutes, re.ruleBased = matchIP(lo.total, lo.mode, ips[0], lo.dport)
+				lo.resolvedIP = ips[0].String()
+			}
 		}
 	}
 
@@ -460,12 +485,6 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				if isPriority || priority == nil || priorityExpired || priorityFailed {
 					// Use immediately
 					return useWinner(sig.srv, sig.out)
-				} else if sig.stop2 {
-					// We received a stop2 signal, must be sent by a direct worker (unlikely case)
-					// Stop all other workers and abort
-					do <- doSignal{nil}
-					abortNoRoute()
-					return false
 				} else if winSrv == nil {
 					// Store as pending (only first one, unless stopped)
 					winSrv = sig.srv
@@ -473,14 +492,6 @@ func (re *remoteConn) getRouteFor(lo localConn) bool {
 				}
 			} else {
 				// Worker failed
-				if sig.stop2 {
-					// We received a stop2 signal, must be sent by a direct worker
-					// Stop all other workers and abort
-					do <- doSignal{nil}
-					abortNoRoute()
-					return false
-				}
-
 				if isPriority {
 					priorityFailed = true
 					if winSrv != nil {
@@ -569,8 +580,8 @@ func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, t
 	select {
 	case <-start:
 		start <- true // put back for next worker
-		out, firstResp, firstIn, bufOut, sentTime, ok, stop2 := re.fetchResponse(lo, srv)
-		try <- routeResult{ok, srv, out, stop2}
+		out, firstResp, firstIn, bufOut, sentTime, ok := re.fetchResponse(lo, srv)
+		try <- routeResult{ok, srv, out}
 
 		if ok {
 			mu.Lock()
@@ -614,7 +625,7 @@ func (re *remoteConn) handleRemote(lo localConn, srv *server, start chan bool, t
 	mu.Unlock()
 }
 
-func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader, sentTime time.Time, ok bool, stop2 bool) {
+func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader, sentTime time.Time, ok bool) {
 	network := lo.network
 	if srv.force4 {
 		network = "tcp4"
@@ -623,7 +634,12 @@ func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, fi
 	var err error
 	if srv.addr == nil {
 		// Direct route
-		dp := net.JoinHostPort(lo.dest, lo.dport)
+		var dp string
+		if lo.resolvedIP != "" {
+			dp = net.JoinHostPort(lo.resolvedIP, lo.dport)
+		} else {
+			dp = net.JoinHostPort(lo.dest, lo.dport)
+		}
 		if *verbose {
 			logger.Printf("%s %5d:  *          %d Dialing to %s %s", lo.mode, lo.total, srv.route, network, dp)
 		}
@@ -713,22 +729,6 @@ func (re *remoteConn) fetchResponse(lo localConn, srv *server) (out net.Conn, fi
 	}
 	if *verbose {
 		logger.Printf("%s %5d:  *          %d TCP connection established", lo.mode, lo.total, srv.route)
-	}
-
-	// dest is hostname, match IP rules after TCP is established
-	if srv.route == 1 && !re.ruleBased && net.ParseIP(lo.dest) == nil {
-		if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
-			newRoutes, ruleBased := matchIP(lo.total, lo.mode, tcpAddr.IP, lo.dport)
-			re.ruleBased = ruleBased
-			if len(newRoutes) > 0 {
-				if !containsRoute(newRoutes, 2) {
-					stop2 = true
-				}
-				if !containsRoute(newRoutes, 1) {
-					return
-				}
-			}
-		}
 	}
 
 	// Send first byte to server

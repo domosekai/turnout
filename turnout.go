@@ -49,6 +49,7 @@ var builddate = "unknown"
 type localConn struct {
 	source        *net.TCPAddr // for transparent socket (source spoofing)
 	dest, dport   string
+	resolvedIP    string
 	host          string
 	key           string
 	conn          net.Conn
@@ -103,10 +104,9 @@ type routeConfig struct {
 }
 
 type routeResult struct {
-	ok    bool
-	srv   *server
-	out   net.Conn
-	stop2 bool
+	ok  bool
+	srv *server
+	out net.Conn
 }
 
 type doSignal struct {
