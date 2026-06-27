@@ -51,7 +51,7 @@ type localConn struct {
 	dest, dport   string
 	resolvedIP    string
 	host          string
-	key           string
+	key           string // for routing table
 	conn          net.Conn
 	buf           *bufio.Reader
 	mode, network string

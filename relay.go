@@ -631,17 +631,17 @@ func (re *remoteConn) fetchResponse(lo *localConn, srv *server) (out net.Conn, f
 		network = "tcp4"
 	}
 
+	var dest string
 	var err error
 	if srv.addr == nil {
 		// Direct route
-		var dp string
 		if lo.resolvedIP != "" {
-			dp = net.JoinHostPort(lo.resolvedIP, lo.dport)
+			dest = net.JoinHostPort(lo.resolvedIP, lo.dport)
 		} else {
-			dp = net.JoinHostPort(lo.dest, lo.dport)
+			dest = net.JoinHostPort(lo.dest, lo.dport)
 		}
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s", lo.mode, lo.total, srv.route, network, dp)
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s", lo.mode, lo.total, srv.route, network, dest)
 		}
 		// it's possible to use client's address as source but we need to fix the return route
 		// useful when turnout is sitting between client and upstream
@@ -650,7 +650,7 @@ func (re *remoteConn) fetchResponse(lo *localConn, srv *server) (out net.Conn, f
 			//LocalAddr: lo.source,
 			//Control:   transparentControl,
 		}
-		out, err = dialer.Dial(network, dp)
+		out, err = dialer.Dial(network, dest)
 	} else if srv.addr.Scheme == "socks5" {
 		// SOCKS5
 		addr := srv.addr.Host
@@ -677,10 +677,15 @@ func (re *remoteConn) fetchResponse(lo *localConn, srv *server) (out net.Conn, f
 			logger.Printf("%s %5d: ERR         %d Failed to dial server %s. Error: %s", lo.mode, lo.total, srv.route, addr, err)
 			return
 		}
-		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, srv.route, network, lo.key, addr)
+		if lo.host != "" {
+			dest = net.JoinHostPort(lo.host, lo.dport)
+		} else {
+			dest = net.JoinHostPort(lo.dest, lo.dport)
 		}
-		out, err = dialer.Dial(network, lo.key)
+		if *verbose {
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, srv.route, network, dest, addr)
+		}
+		out, err = dialer.Dial(network, dest)
 	} else {
 		// HTTP or HTTPS
 		addr := srv.addr.Host
@@ -699,11 +704,16 @@ func (re *remoteConn) fetchResponse(lo *localConn, srv *server) (out net.Conn, f
 			http_dialer.WithProxyAuth(auth),
 			http_dialer.WithTls(&tlsConfig),
 			http_dialer.WithConnectionTimeout(time.Second*time.Duration(srv.timeout)))
+		if lo.host != "" {
+			dest = net.JoinHostPort(lo.host, lo.dport)
+		} else {
+			dest = net.JoinHostPort(lo.dest, lo.dport)
+		}
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, srv.route, network, lo.key, addr)
+			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, srv.route, network, dest, addr)
 		}
 		// HTTP dialer only accepts tcp as network
-		out, err = dialer.Dial("tcp", lo.key)
+		out, err = dialer.Dial("tcp", dest)
 	}
 	if err != nil {
 		if strings.Contains(err.Error(), "time") || strings.Contains(err.Error(), "host unreachable") {
@@ -840,7 +850,7 @@ func (re *remoteConn) fetchResponse(lo *localConn, srv *server) (out net.Conn, f
 					}
 				} else {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d Bad HTTP response from %s. Error: %s", lo.mode, lo.total, srv.route, lo.key, err)
+						logger.Printf("%s %5d:     ERR     %d Bad HTTP response from %s. Error: %s", lo.mode, lo.total, srv.route, dest, err)
 					}
 					if srv.route == 1 && !re.ruleBased {
 						return
@@ -858,11 +868,11 @@ func (re *remoteConn) fetchResponse(lo *localConn, srv *server) (out net.Conn, f
 					}
 				} else if n > recordHeaderLen+1 && recordType(firstIn[0]) == recordTypeAlert {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d TLS Alert from %s: %s", lo.mode, lo.total, srv.route, lo.key, alertText[alert(firstIn[recordHeaderLen+1])])
+						logger.Printf("%s %5d:     ERR     %d TLS Alert from %s: %s", lo.mode, lo.total, srv.route, dest, alertText[alert(firstIn[recordHeaderLen+1])])
 					}
 				} else {
 					if *verbose {
-						logger.Printf("%s %5d:     ERR     %d Bad TLS handshake from %s", lo.mode, lo.total, srv.route, lo.key)
+						logger.Printf("%s %5d:     ERR     %d Bad TLS handshake from %s", lo.mode, lo.total, srv.route, dest)
 					}
 					if srv.route == 1 && !re.ruleBased {
 						return
