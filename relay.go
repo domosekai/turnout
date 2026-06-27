@@ -626,15 +626,14 @@ func (re *remoteConn) handleRemote(lo *localConn, srv *server, start chan bool, 
 }
 
 func (re *remoteConn) fetchResponse(lo *localConn, srv *server) (out net.Conn, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader, sentTime time.Time, ok bool) {
-	network := lo.network
-	if srv.force4 {
-		network = "tcp4"
-	}
-
 	var dest string
 	var err error
 	if srv.addr == nil {
 		// Direct route
+		network := lo.network
+		if srv.force4 {
+			network = "tcp4"
+		}
 		if lo.resolvedIP != "" {
 			dest = net.JoinHostPort(lo.resolvedIP, lo.dport)
 		} else {
@@ -683,9 +682,9 @@ func (re *remoteConn) fetchResponse(lo *localConn, srv *server) (out net.Conn, f
 			dest = net.JoinHostPort(lo.dest, lo.dport)
 		}
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, srv.route, network, dest, addr)
+			logger.Printf("%s %5d:  *          %d Dialing to %s via %s", lo.mode, lo.total, srv.route, dest, addr)
 		}
-		out, err = dialer.Dial(network, dest)
+		out, err = dialer.Dial("tcp", dest)
 	} else {
 		// HTTP or HTTPS
 		addr := srv.addr.Host
@@ -710,7 +709,7 @@ func (re *remoteConn) fetchResponse(lo *localConn, srv *server) (out net.Conn, f
 			dest = net.JoinHostPort(lo.dest, lo.dport)
 		}
 		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s via %s", lo.mode, lo.total, srv.route, network, dest, addr)
+			logger.Printf("%s %5d:  *          %d Dialing to %s via %s", lo.mode, lo.total, srv.route, dest, addr)
 		}
 		// HTTP dialer only accepts tcp as network
 		out, err = dialer.Dial("tcp", dest)
