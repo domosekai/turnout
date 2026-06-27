@@ -112,12 +112,6 @@ func (lo *localConn) handleHTTP() {
 		}
 		if host != lo.dest || port != lo.dport {
 			lo.dest = host
-			lo.key = net.JoinHostPort(host, port)
-			if net.ParseIP(host) == nil {
-				lo.host = host
-			} else {
-				lo.host = ""
-			}
 			lo.dport = port
 			newConn = true
 		}
@@ -177,15 +171,14 @@ func (lo *localConn) handleHTTP() {
 					mu.Unlock()
 					totalBytes += re.sent
 				}
-				re = &remoteConn{
-					hasConnection: connection,
-					reqs:          make(chan *http.Request, httpPipeline),
-					firstReq:      req,
-					first:         header,
-					firstIsFull:   req.ContentLength != 0,
-					successive:    true,
-				}
-				if re.getRouteFor(lo) {
+				re = NewRemoteConnectionFor(lo)
+				re.hasConnection = connection
+				re.reqs = make(chan *http.Request, httpPipeline)
+				re.firstReq = req
+				re.first = header
+				re.firstIsFull = req.ContentLength != 0
+				re.successive = true
+				if re.getRouteFor(lo.conn) {
 					newConn = false
 					re.sent += int64(len(header))
 				} else {

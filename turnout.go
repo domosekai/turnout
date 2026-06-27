@@ -49,9 +49,6 @@ var builddate = "unknown"
 type localConn struct {
 	source        *net.TCPAddr // for transparent socket (source spoofing)
 	dest, dport   string
-	resolvedIP    string
-	host          string
-	key           string // for routing table
 	conn          net.Conn
 	buf           *bufio.Reader
 	mode, network string
@@ -60,6 +57,11 @@ type localConn struct {
 
 type remoteConn struct {
 	conn          net.Conn
+	dest, dport   string
+	resolvedIP    string
+	host          string
+	mode, network string
+	total         int
 	first         []byte
 	firstIsFull   bool
 	firstReq      *http.Request
