@@ -315,7 +315,14 @@ func (re *remoteConn) getRouteFor(loConn net.Conn) bool {
 	var entry *routeEntry
 	var existSrv *server
 	if !*fastSwitch {
-		if r, s, e, n := rt.addOrLock(key, matchedRoutes); e {
+		// We match the first route only, or blocked route may fail to work.
+		// For example, blocked route [2 1] always matches route 1.
+		route := 0
+		if len(matchedRoutes) > 0 {
+			route = matchedRoutes[0]
+		}
+		if r, s, e, n := rt.addOrLock(key, route); e {
+			// When existing, r can't be 0
 			matchedRoutes = []int{r}
 			existSrv = servers[s]
 			if *verbose {

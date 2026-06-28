@@ -162,10 +162,10 @@ func (t *routingTable) del(key string, delay bool, failedRoute, failedServer int
 }
 
 // Note: The only things allowed without locking the table is adding count or updating route
-func (t *routingTable) addOrLock(key string, matched []int) (route, server int, exist bool, entry *routeEntry) {
+func (t *routingTable) addOrLock(key string, matched int) (route, server int, exist bool, entry *routeEntry) {
 	for {
 		t.mu.Lock()
-		if entry = t.table[key]; entry == nil || entry.failed >= 2 || (len(matched) > 0 && !containsRoute(matched, entry.route)) {
+		if entry = t.table[key]; entry == nil || entry.failed >= 2 || (matched != 0 && entry.route != matched) {
 			// Lock entry until route is updated
 			if entry == nil {
 				entry = new(routeEntry)
@@ -178,7 +178,7 @@ func (t *routingTable) addOrLock(key string, matched []int) (route, server int, 
 				// Next line may block
 				entry.mu.Lock()
 				// By this time entry could be already deleted or changed
-				if entry.count == 0 || entry.failed < 2 && (len(matched) == 0 || containsRoute(matched, entry.route)) {
+				if entry.count == 0 || entry.failed < 2 && (matched == 0 || entry.route == matched) {
 					entry.mu.Unlock()
 					continue
 				}
@@ -189,7 +189,7 @@ func (t *routingTable) addOrLock(key string, matched []int) (route, server int, 
 			// Locking entry may block, so unlock table first
 			entry.mu.Lock()
 			// But this may result in locking a deleted entry, so check if it's zombie
-			if entry.count == 0 || entry.failed >= 2 || (len(matched) > 0 && !containsRoute(matched, entry.route)) {
+			if entry.count == 0 || entry.failed >= 2 || (matched != 0 && entry.route != matched) {
 				entry.mu.Unlock()
 				continue
 			}
@@ -212,13 +212,4 @@ func (t *routingTable) unlock(key string, entry *routeEntry) {
 		t.mu.Unlock()
 	}
 	entry.mu.Unlock()
-}
-
-func containsRoute(routes []int, route int) bool {
-	for _, r := range routes {
-		if r == route {
-			return true
-		}
-	}
-	return false
 }
