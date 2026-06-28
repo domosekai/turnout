@@ -69,10 +69,11 @@ type remoteConn struct {
 	srv           *server
 	ruleBased     bool
 	hasConnection bool
-	tls           bool
+	tls, http     bool
 	successive    bool
 	lastReq       time.Time
 	sent          int64
+	done          chan struct{}
 }
 
 type server struct {

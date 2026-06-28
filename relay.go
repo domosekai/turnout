@@ -45,6 +45,7 @@ func NewRemoteConnectionFor(lo *localConn) *remoteConn {
 		total:   lo.total,
 		dest:    lo.dest,
 		dport:   lo.dport,
+		done:    make(chan struct{}),
 	}
 
 	if net.ParseIP(lo.dest) == nil {
@@ -174,7 +175,7 @@ func (lo *localConn) getFirstByte() {
 			if host, _ := normalizeHostname(req.Host, lo.dport); net.ParseIP(host) == nil {
 				re.host = host
 			}
-			re.firstReq = req
+			re.http = true
 			if req.ContentLength != 0 {
 				re.firstIsFull = true
 			}
@@ -186,7 +187,7 @@ func (lo *localConn) getFirstByte() {
 		re.successive = false
 	}
 
-	if n > 0 && n < initialSize && !re.tls && re.firstReq == nil {
+	if n > 0 && n < initialSize && !re.tls && !re.http {
 		// read within time limit, do nothing if a second read has timed out
 		n1, _ := io.ReadFull(lo.buf, first[n:])
 		n += n1
@@ -288,6 +289,10 @@ func (re *remoteConn) getRouteFor(loConn net.Conn) bool {
 						logger.Printf("%s %5d: NXD           DNS resolution failed for %s", re.mode, re.total, re.dest)
 					}
 					return false
+				}
+
+				if *verbose {
+					logger.Printf("%s %5d:  *            IP address resolved to %v", re.mode, re.total, ips[0])
 				}
 
 				matchedRoutes, re.ruleBased = matchIP(re.total, re.mode, ips[0], re.dport)
@@ -456,9 +461,9 @@ func (re *remoteConn) getRouteFor(loConn net.Conn) bool {
 				}
 			}
 		}
-		do <- doSignal{srv}
 		re.srv = srv
 		re.conn = out
+		do <- doSignal{srv}
 		return true
 	}
 
@@ -615,7 +620,11 @@ func (re *remoteConn) handleRemote(loConn net.Conn, key string, srv *server, sta
 					logger.Printf("%s %5d:     CON     %d Continue %s %s -> %s", re.mode, re.total, srv.route, out.LocalAddr().Network(), out.LocalAddr(), out.RemoteAddr())
 				}
 
-				re.relayConnection(loConn, out, srv.route, sentTime, firstResp, firstIn, bufOut)
+				re.relayConnection(loConn, srv.route, sentTime, firstResp, firstIn, bufOut)
+
+				if *verbose {
+					logger.Printf("%s %5d:          *  %d Relay from %s completed", re.mode, re.total, srv.route, out.RemoteAddr())
+				}
 
 				if !*fastSwitch {
 					rt.del(key, true, 0, 0)
@@ -854,7 +863,7 @@ func (re *remoteConn) fetchResponse(loConn net.Conn, srv *server) (out net.Conn,
 				return
 			}
 		} else {
-			if re.firstReq != nil {
+			if re.http {
 				if resp, err := readResponseStatus(bufio.NewReader(bytes.NewReader(firstIn[:n]))); err == nil {
 					if *verbose {
 						logger.Printf("%s %5d:      *      %d HTTP Status %s", re.mode, re.total, srv.route, resp.Status)
@@ -904,15 +913,17 @@ func (re *remoteConn) fetchResponse(loConn net.Conn, srv *server) (out net.Conn,
 	return
 }
 
-func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime time.Time, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader) {
-	// Drain channel so that sender will not block
-	defer func() {
-		for len(re.reqs) > 0 {
-			<-re.reqs
-		}
-	}()
-
+func (re *remoteConn) relayConnection(loConn net.Conn, route int, sentTime time.Time, firstResp *http.Response, firstIn []byte, bufOut *bufio.Reader) {
 	if re.mode == "H" && re.firstReq != nil {
+		defer func() {
+			for range re.reqs {
+				// Drain channel so that sender will not block
+			}
+			// notify client
+			close(re.done)
+		}()
+
+		// Proxy responses need to be parsed one by one
 		var totalBytes, accum int64
 		accumStart := re.lastReq
 		for {
@@ -921,19 +932,23 @@ func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime 
 				resp = firstResp
 				firstResp = nil
 			} else {
-				var err error
-				if _, err = bufOut.ReadByte(); err == nil {
-					if re.firstIsFull {
-						bufOut.UnreadByte()
-						resp, err = http.ReadResponse(bufOut, re.firstReq)
-						re.firstIsFull = false
-					} else if len(re.reqs) > 0 {
-						bufOut.UnreadByte()
-						resp, err = http.ReadResponse(bufOut, <-re.reqs)
+				// We must have a request before reading response
+				var req *http.Request
+				if re.firstIsFull {
+					req = re.firstReq
+					re.firstIsFull = false
+				} else {
+					r, ok := <-re.reqs
+					if !ok {
+						// client is waiting for our close (switching host)
+						re.conn.Close()
 					} else {
-						err = errors.New("HTTP response received with no matching request")
+						req = r
 					}
 				}
+
+				var err error
+				resp, err = http.ReadResponse(bufOut, req)
 				if err != nil {
 					totalTime := time.Since(sentTime)
 					if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "closed") {
@@ -954,7 +969,7 @@ func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime 
 							logger.Printf("H %5d:         RST %d Remote connection reset. Received %d bytes in %.1f s, %.1f s since last request. Error: %s", re.total, route, totalBytes, totalTime.Seconds(), time.Since(re.lastReq).Seconds(), err)
 						}
 						if route == 1 && !re.ruleBased && totalTime.Seconds() < blockSafeTime {
-							if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+							if tcpAddr := re.conn.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 								if re.host == "" {
 									logger.Printf("H %5d:         ADD %d TCP reset detected, %s port %s added to blocked list", re.total, route, tcpAddr.IP, re.dport)
 									blockedIPSet.add(tcpAddr.IP, re.dport)
@@ -972,19 +987,27 @@ func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime 
 							logger.Printf("H %5d:         ERR %d Remote connection closed. Received %d bytes in %.1f s. Error: %s", re.total, route, totalBytes, totalTime.Seconds(), err)
 						}
 					}
+
 					mu.Lock()
 					received[route] += totalBytes
 					mu.Unlock()
-					out.Close()
-					if len(re.reqs) > 0 {
+
+					// Remote connection no longer usable
+					re.conn.Close()
+					// Do nothing on normal close (could have been closed by client)
+					// or we must notify client by closing loConn
+					if req != nil {
 						loConn.Close()
 					}
 					return
 				}
+
 				if *verbose {
 					logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d", re.total, route, resp.Status, resp.ContentLength)
 				}
 			}
+
+			// Parse response header and add proxy fields
 			header, _ := httputil.DumpResponse(resp, false)
 			if !re.hasConnection {
 				buf := bufio.NewReader(bytes.NewReader(header))
@@ -1005,6 +1028,7 @@ func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime 
 				}
 				header = h
 			}
+
 			_, err := loConn.Write(header)
 			totalBytes += int64(len(header))
 			if err != nil {
@@ -1012,18 +1036,24 @@ func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime 
 					logger.Printf("H %5d:     ERR     %d Failed to write HTTP header to client. Error: %s", re.total, route, err)
 				}
 				totalBytes += int64(bufOut.Buffered())
-				bufOut.Discard(bufOut.Buffered())
-				out.Close()
+
+				// Unexpected error, close both ends
+				re.conn.Close()
 				loConn.Close()
+				// Continue so that in next loop we can return with empty == true and update counter
+				bufOut.Discard(bufOut.Buffered())
 				continue
 			}
+
 			if accumStart.Before(re.lastReq) {
 				accumStart = re.lastReq
 				accum = 0
 			}
+
+			// Write body to client
 			if resp.ContentLength == -1 && len(resp.TransferEncoding) > 0 && resp.TransferEncoding[0] == "chunked" {
 				cr := newChunkedReader(bufOut)
-				n, bytes, err := cr.copyTo(loConn, re, out.RemoteAddr(), route, accum)
+				n, bytes, err := cr.copyTo(loConn, re, re.conn.RemoteAddr(), route, accum)
 				accum += bytes
 				totalBytes += bytes
 				if err == nil || errors.Is(err, io.EOF) {
@@ -1037,7 +1067,7 @@ func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime 
 							logger.Printf("H %5d:     RST     %d Chunks parsing reset by server, %.1f s since last request. Error: %s", re.total, route, time.Since(re.lastReq).Seconds(), err)
 						}
 						if route == 1 && !re.ruleBased {
-							if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+							if tcpAddr := re.conn.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 								if re.host == "" {
 									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s port %s added to blocked list", re.total, route, tcpAddr.IP, re.dport)
 									blockedIPSet.add(tcpAddr.IP, re.dport)
@@ -1056,11 +1086,15 @@ func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime 
 						}
 					}
 					totalBytes += int64(bufOut.Buffered())
-					bufOut.Discard(bufOut.Buffered())
-					out.Close()
+
+					// Unexpected error, close both ends
+					re.conn.Close()
 					loConn.Close()
+					// Continue so that in next loop we can return with empty == true and update counter
+					bufOut.Discard(bufOut.Buffered())
 					continue
 				}
+
 				// Write trailer
 				var trailer []byte
 				for {
@@ -1073,7 +1107,7 @@ func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime 
 					}
 				}
 			} else if resp.ContentLength != 0 && resp.Request.Method != "HEAD" {
-				bytes, err := re.writeTo(loConn, resp.Body, true, out.RemoteAddr(), route, accum)
+				bytes, err := re.writeTo(loConn, resp.Body, true, re.conn.RemoteAddr(), route, accum)
 				accum += bytes
 				totalBytes += bytes
 				resp.Body.Close()
@@ -1086,7 +1120,7 @@ func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime 
 							logger.Printf("H %5d:     RST     %d HTTP body fetching reset by server, %.1f s since last request. Error: %s", re.total, route, time.Since(re.lastReq).Seconds(), err)
 						}
 						if route == 1 && !re.ruleBased {
-							if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+							if tcpAddr := re.conn.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 								if re.host == "" {
 									logger.Printf("H %5d:     ADD     %d TCP reset detected, %s port %s added to blocked list", re.total, route, tcpAddr.IP, re.dport)
 									blockedIPSet.add(tcpAddr.IP, re.dport)
@@ -1105,19 +1139,28 @@ func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime 
 						}
 					}
 					totalBytes += int64(bufOut.Buffered())
-					bufOut.Discard(bufOut.Buffered())
-					out.Close()
+
+					// Unexpected error, close both ends
+					re.conn.Close()
 					loConn.Close()
+					// Continue so that in next loop we can return with empty == true and update counter
+					bufOut.Discard(bufOut.Buffered())
 					continue
 				}
 			}
+
+			// We close remote connection per server instruction and continue to update counter in the next loop
+			// client can choose whether to close or reuse connection
 			if resp.Close {
-				defer loConn.Close()
+				re.conn.Close()
+				bufOut.Discard(bufOut.Buffered())
+				continue
 			}
 		}
 	} else {
+		// Non-proxy responses
 		loConn.Write(firstIn)
-		bytes, err := re.writeTo(loConn, bufOut, false, out.RemoteAddr(), route, int64(len(firstIn)))
+		bytes, err := re.writeTo(loConn, bufOut, false, re.conn.RemoteAddr(), route, int64(len(firstIn)))
 		totalBytes := int64(len(firstIn)) + bytes + int64(bufOut.Buffered())
 		totalTime := time.Since(sentTime)
 		if err == nil || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed") || strings.Contains(err.Error(), "time") {
@@ -1148,7 +1191,7 @@ func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime 
 				logger.Printf("%s %5d:         RST %d Remote connection reset. Received %d bytes in %.1f s, %.1f s since last request. Error: %s", re.mode, re.total, route, totalBytes, totalTime.Seconds(), time.Since(re.lastReq).Seconds(), err)
 			}
 			if route == 1 && !re.ruleBased && totalTime.Seconds() < blockSafeTime {
-				if tcpAddr := out.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
+				if tcpAddr := re.conn.RemoteAddr().(*net.TCPAddr); tcpAddr != nil {
 					if re.host == "" {
 						logger.Printf("%s %5d:         ADD %d TCP reset detected, %s port %s added to blocked list", re.mode, re.total, route, tcpAddr.IP, re.dport)
 						blockedIPSet.add(tcpAddr.IP, re.dport)
@@ -1166,9 +1209,11 @@ func (re *remoteConn) relayConnection(loConn, out net.Conn, route int, sentTime 
 				logger.Printf("%s %5d:         ERR %d Remote connection closed. Received %d bytes in %.1f s. Error: %s", re.mode, re.total, route, totalBytes, totalTime.Seconds(), err)
 			}
 		}
+
 		mu.Lock()
 		received[route] += totalBytes
 		mu.Unlock()
+
 		loConn.Close()
 	}
 }
