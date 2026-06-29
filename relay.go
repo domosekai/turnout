@@ -949,6 +949,7 @@ func (re *remoteConn) relayConnection(loConn net.Conn, route int, sentTime time.
 					if !ok {
 						// client is waiting for our close (switching host)
 						re.conn.Close()
+						bufOut.Discard(bufOut.Buffered())
 					} else {
 						req = r
 					}
@@ -1012,6 +1013,12 @@ func (re *remoteConn) relayConnection(loConn net.Conn, route int, sentTime time.
 				if *verbose {
 					logger.Printf("H %5d:      *      %d HTTP Status %s Content-length %d", re.total, route, resp.Status, resp.ContentLength)
 				}
+			}
+
+			// It's not safe to close connection at this stage (body has not been read),
+			// but we need to inform client as soon as possible
+			if resp.Close {
+				re.close = true
 			}
 
 			// Parse response header and add proxy fields

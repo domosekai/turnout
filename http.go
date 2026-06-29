@@ -117,7 +117,7 @@ func (lo *localConn) handleHTTP() {
 		}
 
 		// For persistent connections
-		if host != lo.dest || port != lo.dport {
+		if host != lo.dest || port != lo.dport || re.close {
 			lo.dest = host
 			lo.dport = port
 			newConn = true

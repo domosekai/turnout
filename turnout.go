@@ -73,6 +73,7 @@ type remoteConn struct {
 	successive    bool
 	lastReq       time.Time
 	sent          int64
+	close         bool
 	done          chan struct{}
 }
 
