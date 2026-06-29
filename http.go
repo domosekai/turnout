@@ -156,23 +156,22 @@ func (lo *localConn) handleHTTP() {
 			req.RequestURI = strings.TrimPrefix(req.RequestURI, net.JoinHostPort(host, port))
 			req.RequestURI = strings.TrimPrefix(req.RequestURI, req.Host)
 			req.RequestURI = strings.TrimPrefix(req.RequestURI, host)
-			var connection bool
+
 			if req.Header.Get("Connection") == "" {
+				// We don't have to add a connection header, but we don't want the server to know this is proxied.
 				if value := req.Header.Get("Proxy-Connection"); value != "" {
 					req.Header.Add("Connection", value)
 					req.Close = shouldClose(req.ProtoMajor, req.ProtoMinor, req.Header)
 				}
-				connection = false
-			} else {
-				connection = true
 			}
 			req.Header.Del("Proxy-Connection")
+			req.Header.Del("Proxy-Authorization")
+			req.Header.Del("Proxy-Authenticate")
 
 			header, _ := httputil.DumpRequest(req, false)
 			if !newConn && re.conn != nil {
 				if n, err := re.conn.Write(header); err == nil {
 					// Send req to worker after Write() succeeds, or worker will close loConn if connection is closed
-					re.hasConnection = connection
 					re.reqs <- req
 					re.sent += int64(n)
 				} else {
@@ -202,7 +201,6 @@ func (lo *localConn) handleHTTP() {
 				}
 
 				re = NewRemoteConnectionFor(lo)
-				re.hasConnection = connection
 				re.reqs = make(chan *http.Request, httpPipeline)
 				re.firstReq = req
 				re.first = header

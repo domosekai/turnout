@@ -68,7 +68,6 @@ type remoteConn struct {
 	reqs          chan *http.Request
 	srv           *server
 	ruleBased     bool
-	hasConnection bool
 	tls, http     bool
 	successive    bool
 	lastReq       time.Time

@@ -1021,27 +1021,12 @@ func (re *remoteConn) relayConnection(loConn net.Conn, route int, sentTime time.
 				re.close = true
 			}
 
-			// Parse response header and add proxy fields
+			// Do not change connection header to proxy-connection as they have different scopes.
+			// Client requests are directly forwarded to the server without any delay.
+			// We can't strip connection header for those servers that don't support pipelines,
+			// until we are able to hold the pipelined requests and send according to server capability.
+			resp.Header.Del("Proxy-Connection") // unlikely, just in case
 			header, _ := httputil.DumpResponse(resp, false)
-			if !re.hasConnection {
-				buf := bufio.NewReader(bytes.NewReader(header))
-				c := []byte("Connection:")
-				p := []byte("Proxy-")
-				var h []byte
-				for {
-					line, err := buf.ReadSlice('\n')
-					if err != nil {
-						break
-					}
-					if bytes.HasPrefix(line, c) {
-						h = append(h, p...)
-						h = append(h, line...)
-					} else {
-						h = append(h, line...)
-					}
-				}
-				header = h
-			}
 
 			_, err := loConn.Write(header)
 			totalBytes += int64(len(header))
