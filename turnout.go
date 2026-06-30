@@ -58,7 +58,7 @@ type localConn struct {
 type remoteConn struct {
 	conn          net.Conn
 	dest, dport   string
-	resolvedIP    string
+	resolvedIP    []net.IP
 	host          string
 	mode, network string
 	total         int
@@ -293,7 +293,10 @@ func parseConfig(path string) {
 				log.Fatal("Direct route must have id 1")
 			}
 			if spec.Timeout == 0 {
-				spec.Timeout = 3
+				spec.Timeout = 5
+			}
+			if spec.Timeout < minDialTimeout {
+				log.Fatalf("Direct route timeout must be at least %d seconds", minDialTimeout)
 			}
 			directSrv := &server{
 				id:      0,

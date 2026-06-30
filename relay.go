@@ -29,6 +29,7 @@ const (
 	maxSampleInterval = 30   // Too long sample period might not mean anything
 	minSpeed          = 1    // Average speed below this kB/s is likely to have special purpose
 	blockSafeTime     = 2    // After this many seconds it is less likely to be reset by firewall
+	minDialTimeout    = 2
 )
 
 var (
@@ -291,12 +292,32 @@ func (re *remoteConn) getRouteFor(loConn net.Conn) bool {
 					return false
 				}
 
-				if *verbose {
-					logger.Printf("%s %5d:  *            IP address resolved to %v", re.mode, re.total, ips[0])
+				// We can prioritize rule-based results, but then we may be, for example, always picking addresses from some group (AS / region).
+				// Instead, we use the first one as benchmark so that some randomness is preserved.
+				matchedRoutes, re.ruleBased = matchIP(re.total, re.mode, ips[0], re.dport)
+				re.resolvedIP = []net.IP{ips[0]}
+
+			Outer:
+				// Filter out IPs that don't match the same route
+				for _, ip := range ips[1:] {
+					rs, _ := matchIP(re.total, re.mode, ip, re.dport)
+
+					if len(matchedRoutes) != len(rs) {
+						continue
+					}
+
+					for i, r := range rs {
+						if matchedRoutes[i] != r {
+							continue Outer
+						}
+					}
+
+					re.resolvedIP = append(re.resolvedIP, ip)
 				}
 
-				matchedRoutes, re.ruleBased = matchIP(re.total, re.mode, ips[0], re.dport)
-				re.resolvedIP = ips[0].String()
+				if *verbose {
+					logger.Printf("%s %5d:  *            IP address resolved to %d/%d candidates, matching routes %v", re.mode, re.total, len(re.resolvedIP), len(ips), matchedRoutes)
+				}
 			}
 		}
 	}
@@ -668,14 +689,6 @@ func (re *remoteConn) fetchResponse(loConn net.Conn, srv *server) (out net.Conn,
 		if srv.force4 {
 			network = "tcp4"
 		}
-		if re.resolvedIP != "" {
-			dest = net.JoinHostPort(re.resolvedIP, re.dport)
-		} else {
-			dest = net.JoinHostPort(re.dest, re.dport)
-		}
-		if *verbose {
-			logger.Printf("%s %5d:  *          %d Dialing to %s %s", re.mode, re.total, srv.route, network, dest)
-		}
 		// it's possible to use client's address as source but we need to fix the return route
 		// useful when turnout is sitting between client and upstream
 		dialer := &net.Dialer{
@@ -683,7 +696,34 @@ func (re *remoteConn) fetchResponse(loConn net.Conn, srv *server) (out net.Conn,
 			//LocalAddr: lo.source,
 			//Control:   transparentControl,
 		}
-		out, err = dialer.Dial(network, dest)
+		if len(re.resolvedIP) > 0 {
+			deadline := time.Now().Add(time.Second * time.Duration(srv.timeout))
+			for i, ip := range re.resolvedIP {
+				remaining := time.Until(deadline)
+				if remaining <= 0 {
+					break
+				}
+				t := remaining / time.Duration(len(re.resolvedIP)-i)
+				if t < time.Second*minDialTimeout {
+					t = time.Second * minDialTimeout
+				}
+				dialer.Timeout = t
+				dest = net.JoinHostPort(ip.String(), re.dport)
+				if *verbose {
+					logger.Printf("%s %5d:  *          %d Dialing to %s %s (%d/%d)", re.mode, re.total, srv.route, network, dest, i+1, len(re.resolvedIP))
+				}
+				out, err = dialer.Dial(network, dest)
+				if err == nil {
+					break
+				}
+			}
+		} else {
+			dest = net.JoinHostPort(re.dest, re.dport)
+			if *verbose {
+				logger.Printf("%s %5d:  *          %d Dialing to %s %s", re.mode, re.total, srv.route, network, dest)
+			}
+			out, err = dialer.Dial(network, dest)
+		}
 	} else if srv.addr.Scheme == "socks5" {
 		// SOCKS5
 		addr := srv.addr.Host
