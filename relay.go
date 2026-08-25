@@ -758,7 +758,15 @@ func (re *remoteConn) fetchResponse(loConn net.Conn, srv *server) (out net.Conn,
 		if *verbose {
 			logger.Printf("%s %5d:  *          %d Dialing to %s via %s", re.mode, re.total, srv.route, dest, addr)
 		}
-		out, err = dialer.Dial("tcp", dest)
+		// Use DialContext so that the timeout also covers the SOCKS5 handshake,
+		// not just the TCP connection to the proxy
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(srv.timeout))
+		defer cancel()
+		if cd, ok := dialer.(proxy.ContextDialer); ok {
+			out, err = cd.DialContext(ctx, "tcp", dest)
+		} else {
+			out, err = dialer.Dial("tcp", dest)
+		}
 	} else {
 		// HTTP or HTTPS
 		addr := srv.addr.Host
