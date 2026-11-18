@@ -71,7 +71,7 @@ func (lo *localConn) handleHTTP() {
 		if err != nil {
 			if re.sent > 0 {
 				mu.Lock()
-				sent[re.route] += re.sent
+				sent[re.srv.route] += re.sent
 				mu.Unlock()
 				totalBytes += re.sent
 			}
@@ -84,7 +84,7 @@ func (lo *localConn) handleHTTP() {
 					logger.Printf("H %5d:          *    Local connection reset. Sent %d bytes.", lo.total, totalBytes)
 				}
 				if re.conn != nil {
-					if tcp, ok := (*re.conn).(*net.TCPConn); ok {
+					if tcp, ok := re.conn.(*net.TCPConn); ok {
 						tcp.SetLinger(0)
 					}
 				}
@@ -101,33 +101,30 @@ func (lo *localConn) handleHTTP() {
 			}
 			break
 		}
-		if *verbose {
-			logger.Printf("H %5d:  *            HTTP %s Host %s Content-length %d", lo.total, req.Method, req.Host, req.ContentLength)
-		}
+
 		host, port := normalizeHostname(req.Host, "80")
 		if host == "" {
 			logger.Printf("H %5d: ERR           Invalid HTTP host: %s", lo.total, req.Host)
 			rejectHTTP(lo.conn)
-			break
+			// Close and clear buffer so that in next loop we can break and update counter
+			lo.conn.Close()
+			lo.buf.Discard(lo.buf.Buffered())
+			continue
 		}
-		if host != lo.dest || port != lo.dport {
+
+		if *verbose {
+			logger.Printf("H %5d:  *            HTTP %s Host %s Content-length %d", lo.total, req.Method, req.Host, req.ContentLength)
+		}
+
+		// For persistent connections
+		if host != lo.dest || port != lo.dport || re.close {
 			lo.dest = host
-			lo.key = net.JoinHostPort(host, port)
-			if net.ParseIP(host) == nil {
-				lo.host = host
-				lo.destIsIP = false
-			} else {
-				lo.host = ""
-				lo.destIsIP = true
-			}
 			lo.dport = port
 			newConn = true
 		}
 
 		if req.Method == "CONNECT" {
-			if re.conn != nil {
-				(*re.conn).Close()
-			}
+			// HTTP Connect is one-shot
 			resp := &http.Response{
 				Status:     "200 Connection established",
 				StatusCode: 200,
@@ -135,72 +132,99 @@ func (lo *localConn) handleHTTP() {
 				ProtoMajor: 1,
 				ProtoMinor: 1,
 			}
+
 			respBytes, _ := httputil.DumpResponse(resp, false)
 			if _, err := lo.conn.Write(respBytes); err != nil {
-				break
+				// Close and clear buffer so that in next loop we can break and update counter
+				lo.conn.Close()
+				lo.buf.Discard(lo.buf.Buffered())
+				continue
 			}
+
+			// HTTP Connect reuses HTTP plain session (rare case)
+			if re.reqs != nil {
+				close(re.reqs)
+			}
+
 			lo.getFirstByte()
-			break
+
+			// Do not break or re.reqs will be closed again
+			return
 		} else {
+			// Turn proxy request to normal request
 			req.RequestURI = strings.TrimPrefix(req.RequestURI, "http://")
 			req.RequestURI = strings.TrimPrefix(req.RequestURI, net.JoinHostPort(host, port))
 			req.RequestURI = strings.TrimPrefix(req.RequestURI, req.Host)
 			req.RequestURI = strings.TrimPrefix(req.RequestURI, host)
-			var connection bool
+
 			if req.Header.Get("Connection") == "" {
+				// We don't have to add a connection header, but we don't want the server to know this is proxied.
 				if value := req.Header.Get("Proxy-Connection"); value != "" {
 					req.Header.Add("Connection", value)
 					req.Close = shouldClose(req.ProtoMajor, req.ProtoMinor, req.Header)
 				}
-				connection = false
-			} else {
-				connection = true
 			}
 			req.Header.Del("Proxy-Connection")
+			req.Header.Del("Proxy-Authorization")
+			req.Header.Del("Proxy-Authenticate")
+
 			header, _ := httputil.DumpRequest(req, false)
 			if !newConn && re.conn != nil {
-				re.hasConnection = connection
-				re.reqs <- req
-				if n, err := (*re.conn).Write(header); err == nil {
+				if n, err := re.conn.Write(header); err == nil {
+					// Send req to worker after Write() succeeds, or worker will close loConn if connection is closed
+					re.reqs <- req
 					re.sent += int64(n)
 				} else {
+					if *verbose {
+						logger.Printf("H %5d:  *            Failed to reuse HTTP connection: %v", lo.total, err)
+					}
 					newConn = true
 				}
 			} else {
 				newConn = true
 			}
+
 			if newConn {
-				if re.conn != nil {
-					(*re.conn).Close()
+				// re will be replaced, no double closure
+				if re.reqs != nil {
+					// Pipelined requests may contain new hosts. We need to wait for the worker to complete.
+					// Do not close re.conn immediately or we will lose data.
+					close(re.reqs)
+					<-re.done
 				}
+
 				if re.sent > 0 {
 					mu.Lock()
-					sent[re.route] += re.sent
+					sent[re.srv.route] += re.sent
 					mu.Unlock()
 					totalBytes += re.sent
 				}
-				re = &remoteConn{
-					hasConnection: connection,
-					reqs:          make(chan *http.Request, httpPipeline),
-					firstReq:      req,
-					first:         header,
-					firstIsFull:   req.ContentLength != 0,
-					successive:    true,
-				}
-				if re.getRouteFor(*lo) {
+
+				re = NewRemoteConnectionFor(lo)
+				re.reqs = make(chan *http.Request, httpPipeline)
+				re.firstReq = req
+				re.first = header
+				re.firstIsFull = req.ContentLength != 0
+				re.successive = true
+
+				if re.getRouteFor(lo.conn) {
 					newConn = false
 					re.sent += int64(len(header))
 				} else {
-					lo.buf.Discard(lo.buf.Buffered())
 					rejectHTTP(lo.conn)
+					// Close and clear buffer so that in next loop we can break and update counter
+					lo.conn.Close()
+					lo.buf.Discard(lo.buf.Buffered())
 					continue
 				}
 			} else {
 				re.lastReq = time.Now()
 			}
+
+			// Body
 			if req.ContentLength == -1 && len(req.TransferEncoding) > 0 && req.TransferEncoding[0] == "chunked" {
 				cr := newChunkedReader(lo.buf)
-				n, bytes, err := cr.copy(*re.conn)
+				n, bytes, err := cr.copy(re.conn)
 				re.sent += bytes
 				if errors.Is(err, io.EOF) {
 					if *verbose {
@@ -210,29 +234,34 @@ func (lo *localConn) handleHTTP() {
 					if *verbose {
 						logger.Printf("H %5d: ERR           Parsed %d chunks and %d bytes but failed to sent to server. Error: %s", lo.total, n, bytes, err)
 					}
+					// Close and clear buffer so that in next loop we can break and update counter
+					lo.conn.Close()
 					lo.buf.Discard(lo.buf.Buffered())
 					continue
 				}
+
 				// Write trailer
 				var trailer []byte
 				for {
 					line, err := lo.buf.ReadSlice('\n')
 					trailer = append(trailer, line...)
 					if len(line) == 2 || err != nil {
-						n, _ := (*re.conn).Write(trailer)
+						n, _ := re.conn.Write(trailer)
 						re.sent += int64(n)
 						break
 					}
 				}
 				re.lastReq = time.Now()
 			} else if req.ContentLength != 0 {
-				bytes, err := io.Copy(*re.conn, req.Body)
+				bytes, err := io.Copy(re.conn, req.Body)
 				re.sent += bytes
 				req.Body.Close()
 				if err != nil {
 					if *verbose {
 						logger.Printf("H %5d: ERR           Failed to send HTTP body to server. Error: %s", lo.total, err)
 					}
+					// Close and clear buffer so that in next loop we can break and update counter
+					lo.conn.Close()
 					lo.buf.Discard(lo.buf.Buffered())
 					continue
 				}
@@ -240,8 +269,10 @@ func (lo *localConn) handleHTTP() {
 			}
 		}
 	}
-	if re.conn != nil {
-		(*re.conn).Close()
+
+	// Cleanup for HTTP plain sessions
+	if re.reqs != nil {
+		close(re.reqs)
 	}
 }
 

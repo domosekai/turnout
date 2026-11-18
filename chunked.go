@@ -83,14 +83,14 @@ func (cr *chunkedReader) copy(w net.Conn) (number int, n int64, err error) {
 	return number, n, cr.err
 }
 
-func (cr *chunkedReader) copyTo(lo localConn, re remoteConn, addr net.Addr, route int, lastBytes int64) (number int, n int64, err error) {
+func (cr *chunkedReader) copyTo(loConn net.Conn, re *remoteConn, addr net.Addr, route int, lastBytes int64) (number int, n int64, err error) {
 	for cr.err == nil {
 		h := cr.beginChunk()
 		if cr.n > 0 {
-			lo.conn.Write(h)
+			loConn.Write(h)
 			var n0 int64
 			r := io.LimitReader(cr.r, int64(cr.n)+2)
-			n0, cr.err = re.writeTo(lo, r, true, addr, route, lastBytes+n)
+			n0, cr.err = re.writeTo(loConn, r, true, addr, route, lastBytes+n)
 			if errors.Is(cr.err, io.EOF) {
 				cr.err = nil
 			}
@@ -99,7 +99,7 @@ func (cr *chunkedReader) copyTo(lo localConn, re remoteConn, addr net.Addr, rout
 			number++
 		}
 		if cr.err == io.EOF {
-			lo.conn.Write(h)
+			loConn.Write(h)
 			n += int64(len(h))
 			return number, n, cr.err
 		}
@@ -148,10 +148,11 @@ func isASCIISpace(b byte) bool {
 
 // removeChunkExtension removes any chunk-extension from p.
 // For example,
-//     "0" => "0"
-//     "0;token" => "0"
-//     "0;token=val" => "0"
-//     `0;token="quoted string"` => "0"
+//
+//	"0" => "0"
+//	"0;token" => "0"
+//	"0;token=val" => "0"
+//	`0;token="quoted string"` => "0"
 func removeChunkExtension(p []byte) ([]byte, error) {
 	semi := bytes.IndexByte(p, ';')
 	if semi == -1 {

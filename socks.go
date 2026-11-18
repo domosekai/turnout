@@ -73,9 +73,6 @@ func (lo *localConn) handleSocks() {
 
 	dest := net.JoinHostPort(host, port)
 	lo.dest = host
-	if net.ParseIP(host) == nil {
-		lo.host = host
-	}
 	lo.dport = port
 
 	if *verbose {

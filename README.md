@@ -76,9 +76,9 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
 
 - Smart selection of routes
 
-  For TLS connections, Turnout attempts connections via the main route and all priority-1 proxies simultaneously. If none of them works then priority-2 proxies are tried. The fastest server that sends back a valid first byte will be chosen. 
+  For TLS connections, Turnout attempts connections via the main route and all tier-0 proxies simultaneously. If none of them works then tier-1 proxies are tried. The fastest server that sends back a valid first byte will be chosen. 
   
-  For other protocols, attempts are made one at a time according to priority settings (main route, priority-1, priority-2...), because sending the same content via multiple routes may lead to errors.
+  For other protocols, attempts are made one at a time according to tier settings (main route, tier-0, tier-1...), because sending the same content via multiple routes may lead to errors.
   
 - Destination-based server switch
 
@@ -88,7 +88,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
 - Fail-over design
 
-  Turnout does not monitor the status of the proxies like Clash. All servers are attempted according to the mechanism described above and the failure of one or two servers should not lead to downtime of the service. However, it's inefficient to entirely rely on this fail-over design by specifying a large number of servers, especially of the same priority, which can be CPU-intensive.
+  Turnout does not monitor the status of the proxies like Clash. All servers are attempted according to the mechanism described above and the failure of one or two servers should not lead to downtime of the service. However, it's inefficient to entirely rely on this fail-over design by specifying a large number of servers, especially of the same tier, which can be CPU-intensive.
   
   You are recommended to put in place your own monitoring in parallel to Turnout. For example, you can specify 3 servers for Turnout and periodically monitor them based on some rules. If any one of them is deemed down, replace it with another one serving the same port so that Turnout does not need to restart.
 
@@ -105,9 +105,30 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   
   This example starts a transparent proxy at port 2222 and sets 127.0.0.1:1080 as the upstream SOCKS5 proxy. Connections with download speed less than 100 kB/s will be added to slow list and routed via route 2 from the next connection. Incoming LAN traffic from interface br0 to non-local addresses is redirected to the proxy.
   
+  Create a config file `config.json`:
+  
+  ```json
+  {
+    "routes": [
+      {
+        "id": 1,
+        "direct": true,
+        "timeout": 3
+      },
+      {
+        "id": 2,
+        "timeout": 5,
+        "tiers": [
+          ["127.0.0.1:1080"]
+        ]
+      }
+    ]
+  }
+  ```
+  
   ```shell
   # Start Turnout in the background
-  turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t -slow 100 &
+  turnout -b 0.0.0.0:2222 -c config.json -t -slow 100 &
   
   # Option 1: Set up REDIRECT for all outgoing traffic (CPU-intensive)
   iptables -t nat -A PREROUTING -i br0 ! -d 192.168.0.0/16 -p tcp -j REDIRECT --to-ports 2222
@@ -129,10 +150,32 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   ip route add local 0.0.0.0/0 dev lo table 100
   ```
   
-  Multiple proxies can be configured to provide fail-over function. 3 priority grades can be set and lower grade servers are only used if higher grade servers fail. In this example, 192.168.1.1:1080 is set as main server (with priority 1) and 192.168.2.1:1080 and 192.168.2.1:1081 are priority-2 servers. Once 192.168.1.1:1080 fails, these two servers will be tried at the same time and the faster one will convey the traffic. You can set priorities according to the prices of the servers, for example.
+  Multiple proxies can be configured to provide fail-over function. Multiple tiers can be set and lower tier servers are only used if higher tier servers fail. In this example, 192.168.1.1:1080 is set as tier-0 server and 192.168.2.1:1080 and 192.168.2.1:1081 are tier-1 servers. Once 192.168.1.1:1080 fails, these two servers will be tried at the same time and the faster one will convey the traffic. You can set tiers according to the prices of the servers, for example. Each route has its own connection timeout (in seconds).
+  
+  Create `config.json`:
+  
+  ```json
+  {
+    "routes": [
+      {
+        "id": 1,
+        "direct": true,
+        "timeout": 3
+      },
+      {
+        "id": 2,
+        "timeout": 5,
+        "tiers": [
+          ["192.168.1.1:1080"],
+          ["192.168.2.1:1080", "192.168.2.1:1081"]
+        ]
+      }
+    ]
+  }
+  ```
   
   ```shell
-  turnout -b 0.0.0.0:2222 -s 192.168.1.1:1080 -s2 192.168.2.1:1080,192.168.2.1:1081 -t
+  turnout -b 0.0.0.0:2222 -c config.json -t
   ```
   
 - Local HTTP proxy
@@ -142,12 +185,14 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   Local HTTP proxy and transparent proxy can be enabled at the same time.
   
   ```shell
-  turnout -h 127.0.0.1:8080 -s 127.0.0.1:1080 -slow 100
+  turnout -h 127.0.0.1:8080 -c config.json -slow 100
   ```
 
 - IP and host lists
 
   Turnout is supposed to be doing routing automatically without the help of any list. But it still supports these lists for the use by advanced users. Please refer to the sample lists to learn about the format.
+
+  Routes in rules can be comma-separated for fallback. For example, `1,2` means try route 1 first, and if it fails, try route 2. Only positive routes are allowed in multi-route specifications.
 
 - Proxy schemes
 
@@ -164,6 +209,58 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
   http://192.168.1.1:8080                     # HTTP proxy
   http://username:password@192.168.1.1:8080   # HTTP proxy with authentication
   https://a-fake-proxy.com:443                # HTTPS proxy
+  ```
+
+- Config file format
+
+  Routes are configured via a JSON file specified with the `-c` flag. The file contains a `routes` array defining all available routes.
+  
+  Each route has an `id` (positive integer), a `timeout` (connection timeout in seconds), and `tiers` (array of tier arrays). Route 1 must be a direct route (`"direct": true`). Proxy routes contain server URLs in their tiers.
+  
+  Tier 0 servers are tried first. If all servers in a tier fail, the next tier is tried. Routes support an arbitrary number of tiers.
+  
+  Optional top-level fields:
+  - `timeout`: Global timeout in seconds for the entire route-selection process (default: 20). If no route responds within this time, all workers are stopped and the connection is aborted.
+  - `dnsTimeout`: Timeout in seconds for DNS resolution when routing by hostname (default: 3). Must be positive.
+  - `auto`: Automatic routing strategy with `primary`, `secondary`, and `priority` (seconds to prioritize primary)
+  - `blockedRoute`: Route ID(s) to use for blocked/slow destinations (default: "2,1"). Can be comma-separated for fallback (e.g., "2,3").
+  
+  ```json
+  {
+    "routes": [
+      {
+        "id": 1,
+        "direct": true,
+        "timeout": 3,
+        "force4": false
+      },
+      {
+        "id": 2,
+        "timeout": 5,
+        "tiers": [
+          ["socks5://primary.example.com:1080"],
+          ["socks5://fallback1.example.com:1080", "socks5://fallback2.example.com:1080"],
+          ["http://last-resort.example.com:8080"]
+        ]
+      },
+      {
+        "id": 3,
+        "timeout": 8,
+        "tiers": [
+          ["socks5://special1.example.com:1080"],
+          ["socks5://special2.example.com:1080"]
+        ]
+      }
+    ],
+    "timeout": 20,
+    "dnsTimeout": 5,
+    "auto": {
+      "primary": 1,
+      "secondary": 2,
+      "priority": 1
+    },
+    "blockedRoute": "2,3"
+  }
   ```
 
 - System signal
@@ -192,7 +289,7 @@ User ------ Router ---(ISP)---- Route 1 (default unreliable route)
     For example this command sets limit to 10000 and starts Turnout if successful.
     
     ```shell
-    ulimit -n 10000 && turnout -b 0.0.0.0:2222 -s 127.0.0.1:1080 -t
+    ulimit -n 10000 && turnout -b 0.0.0.0:2222 -c config.json -t
     ```
     
   - Unexpected closure of TLS connections
