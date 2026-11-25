@@ -347,7 +347,7 @@ func (re *remoteConn) getRouteFor(loConn net.Conn) bool {
 			matchedRoutes = []int{r}
 			existSrv = servers[s]
 			if *verbose {
-				logger.Printf("%s %5d: EXT           Connections to %s exist. Select route %d server %d", re.mode, re.total, key, r, s)
+				logger.Printf("%s %5d: EXT         %d Connections to %s exist. Select route %d server %d", re.mode, re.total, r, key, r, s)
 			}
 			entry = n
 		} else {
